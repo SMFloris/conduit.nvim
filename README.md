@@ -1,6 +1,6 @@
 # conduit.nvim
 
-A Neovim client for terminal-based AI coding agents. Conduit keeps a native agent TUI alive in a floating terminal, submits editor-aware prompts through the Agent Client Protocol (ACP), and refreshes buffers when the agent finishes.
+A Neovim client for ACP coding agents. Conduit provides a floating session dashboard, submits editor-aware prompts through `acpx`, and refreshes buffers when the agent finishes.
 
 Based on [opencode.nvim](https://github.com/NickvanDyke/opencode.nvim) but with a tool-agnostic design.
 
@@ -13,7 +13,8 @@ https://github.com/user-attachments/assets/bc8db443-3c52-4f6f-993c-06bbbdf114ac
 ## Features
 
 - **Lazy, persistent agents** - Uses `acpx` to retain one ACP session per project
-- **Native agent terminal** - Keeps the agent's own TUI available in a persistent floating terminal
+- **Session dashboard** - Live `acpx sessions watch` transcript, prompt input, and queue sidebar in one floating layout
+- **Fuzzy file references** - Type `@` in the dashboard prompt to find project files and insert references
 - **ACP prompts** - Sends prompts directly instead of using the clipboard
 - **Interactive prompt input** with completions, syntax highlighting, and normal-mode support
 - **Built-in prompt library** with ability to define custom prompts
@@ -74,14 +75,12 @@ The default mappings are:
 | Mapping | Action |
 | - | - |
 | `<leader>aa` | Enter a prompt and submit it over ACP |
-| `<leader>aA` | Open or focus the persistent native agent terminal |
+| `<leader>aA` | Open or focus the ACP session dashboard |
 | `<leader>ap` | Select a prompt from the prompt library |
 | `<leader>ax` | Cancel the active ACP turn |
 | `<leader>aX` | Clear prompts waiting behind the active turn |
 
-The `acpx` session starts on the first prompt. Opening the terminal launches the configured native command directly, without starting ACP. Closing the floating window only hides it; the terminal job and buffer remain alive.
-
-The native TUI and `acpx` use separate sessions. ACP agents such as Codex may lock a provider thread to one controlling application, so attempting to attach another native TUI can make it read-only. Conduit keeps the standalone terminal alive while `acpx` owns editor prompts, persistence, and cross-process coordination.
+Opening the dashboard ensures the project session exists and starts a persistent `acpx sessions watch` process. The top pane shows the live transcript, the bottom pane submits prompts with `<CR>` or `<C-s>`, and the sidebar shows the active and queued prompts. Type `@` in the prompt pane to fuzzy-find a project file. Press `<C-q>` from any pane, or `q` in normal mode, to hide the dashboard; `<leader>aA` reopens the same watcher and buffers.
 
 You can also call the functions directly:
 
@@ -89,7 +88,7 @@ You can also call the functions directly:
 -- Call directly
 :lua require('conduit').ask() -- Open a blank prompt input and submit it
 :lua require('conduit').ask('@cursor: ') -- Open the prompt input with a pre-filled value
-:lua require('conduit').open_agent() -- Open/focus the native agent TUI
+:lua require('conduit').open_agent() -- Open/focus the ACP session dashboard
 :lua require('conduit').select_prompt() -- Open the prompt picker
 :lua require('conduit').select_prompt('review_buffer') -- Submit a named prompt immediately
 :lua require('conduit').cancel() -- Cancel the active ACP turn
@@ -112,7 +111,6 @@ agent = {
   cmd = { "opencode" },
   -- Derived defaults:
   -- transport = "acpx"
-  -- terminal_cmd = { "opencode" }
 }
 ```
 
@@ -122,7 +120,6 @@ Codex uses the built-in `acpx codex` profile:
 agent = {
   name = "codex",
   type = "local",
-  cmd = { "wcodex" }, -- or { "codex" }
   -- transport = "acpx"
   -- client_cmd = { "acpx" }
   -- permission_mode = "approve-all"
@@ -165,7 +162,7 @@ Remote ACP transport is not yet standardized across all agents. Override `acp_cm
 2. Conduit asks `acpx` to ensure the project session exists.
 3. The expanded prompt is submitted through `acpx` in strict JSON mode.
 4. When the turn finishes, Conduit safely checks changed project buffers and emits the `User ConduitTurnComplete` autocmd.
-5. Press `<leader>aA` to open the persistent native terminal.
+5. Press `<leader>aA` to watch the session, submit more prompts, and inspect the queue.
 
 If no agent is configured, `ask` retains the original behavior and copies the expanded prompt to the `+` register.
 
@@ -176,7 +173,7 @@ If no agent is configured, `ask` retains the original behavior and copies the ex
 | `setup` | Configure Conduit and install its default mappings |
 | `ask` | Input and submit a prompt. Highlights and completes contexts. |
 | `submit` | Expand and submit a prompt directly |
-| `open_agent` | Open or focus the persistent native agent terminal |
+| `open_agent` | Open or focus the ACP session dashboard |
 | `cancel` | Cancel the active ACP turn |
 | `clear_queue` | Remove pending prompts and return how many were removed |
 | `status` | Return the current project agent's state and session ID |

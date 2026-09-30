@@ -70,6 +70,8 @@ local defaults = {
     border = "rounded",
     title = " Conduit agent ",
     title_pos = "center",
+    close_key = "<C-q>",
+    normal_close_key = "q",
   },
   contexts = {
     ---@class conduit.Context

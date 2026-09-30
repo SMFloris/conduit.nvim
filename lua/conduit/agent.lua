@@ -250,6 +250,17 @@ local function acpx_command(instance, ...)
   return command
 end
 
+local function acpx_watch_command(instance)
+  local command = vim.deepcopy(instance.adapter.client_command)
+  vim.list_extend(command, {
+    "--cwd", instance.cwd,
+    "--format", "text",
+    instance.adapter.agent_name,
+    "sessions", "watch",
+  })
+  return command
+end
+
 local function finish_acpx_ensure(instance, err)
   local callbacks = instance.acpx_waiters
   instance.acpx_waiters = {}
@@ -513,7 +524,8 @@ function M.submit(prompt)
   local acpx_instance, acpx_err = get_instance()
   if acpx_instance and acpx_instance.adapter.transport == "acpx" then
     table.insert(acpx_instance.queue, prompt)
-    if acpx_instance.state == "busy" or acpx_instance.refreshing or acpx_instance.finishing then
+    if acpx_instance.state == "starting" or acpx_instance.state == "busy" or acpx_instance.refreshing
+        or acpx_instance.finishing or #acpx_instance.queue > 1 then
       local count = #acpx_instance.queue
       notify("Conduit: prompt queued (" .. count .. " waiting)")
       emit("ConduitPromptQueued", {
@@ -561,6 +573,16 @@ function M.open_terminal()
   end
   if instance.adapter.kind ~= "local" then
     notify("Conduit: remote agents do not have a local terminal", vim.log.levels.WARN)
+    return
+  end
+  if instance.adapter.transport == "acpx" then
+    ensure_acpx(instance, function(ready, ensure_err)
+      if not ready then
+        notify("Conduit: " .. ensure_err, vim.log.levels.ERROR)
+        return
+      end
+      require("conduit.dashboard").open(ready.cwd, acpx_watch_command(ready), ready.adapter.env)
+    end)
     return
   end
   local command = instance.adapter.terminal_command(instance.session_id)
@@ -632,6 +654,7 @@ function M.stop_all()
     end
   end
   require("conduit.terminal").stop_all()
+  require("conduit.dashboard").stop_all()
 end
 
 function M.status()
@@ -645,6 +668,8 @@ function M.status()
     session_id = instance.session_id,
     queue_length = #instance.queue + #instance.native_queue,
     queue_owner = instance.adapter.queue_mode,
+    queued_prompts = vim.deepcopy(instance.queue),
+    current_prompt = instance.current_prompt,
     busy = instance.state == "busy" or instance.refreshing or false,
     steering_supported = instance.steering_supported or false,
     transport = instance.adapter.transport or "direct",
