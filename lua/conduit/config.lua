@@ -35,6 +35,9 @@ vim.g.conduit_opts = vim.g.conduit_opts
 ---@field name? "opencode"|"codex"|string
 ---@field cmd? string[] Native terminal command for built-in local adapters.
 ---@field acp_cmd? string[] ACP subprocess or remote bridge command.
+---@field transport? "acpx"|"direct" Use acpx session management or the built-in ACP client. Defaults to acpx for built-in local agents.
+---@field client_cmd? string[] acpx executable command. Defaults to { "acpx" }.
+---@field permission_mode? "approve-all"|"approve-reads"|"deny-all" Permission policy passed to acpx. Defaults to approve-all.
 ---@field terminal_cmd? string[]|fun(session_id: string|nil): string[]
 ---@field cwd? string|fun(): string
 ---@field env? table<string, string>

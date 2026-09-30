@@ -12,8 +12,8 @@ https://github.com/user-attachments/assets/bc8db443-3c52-4f6f-993c-06bbbdf114ac
 
 ## Features
 
-- **Lazy, persistent agents** - Starts one ACP session per working directory and reuses it
-- **Native agent terminal** - Opens the same ACP session in the agent's own TUI
+- **Lazy, persistent agents** - Uses `acpx` to retain one ACP session per project
+- **Native agent terminal** - Keeps the agent's own TUI available in a persistent floating terminal
 - **ACP prompts** - Sends prompts directly instead of using the clipboard
 - **Interactive prompt input** with completions, syntax highlighting, and normal-mode support
 - **Built-in prompt library** with ability to define custom prompts
@@ -26,10 +26,16 @@ https://github.com/user-attachments/assets/bc8db443-3c52-4f6f-993c-06bbbdf114ac
 - **Project-aware sessions** - Detects LSP or marker roots and isolates agents and history by project
 - **Prompt history** - Use Up/Down in the enhanced prompt window to revisit project prompts
 - **Observable lifecycle** - User autocmds expose agent, queue, and turn state
-- **Native queueing** - Codex receives waiting prompts immediately and owns their FIFO
+- **Reliable queueing** - Keeps prompt order locally while `acpx` coordinates cross-process session ownership
 - **Sensible defaults** with granular configuration options
 
 ## Installation
+
+Install [`acpx`](https://github.com/openclaw/acpx) first (Node.js 22.13 or newer is required):
+
+```bash
+npm install -g acpx@latest
+```
 
 Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
@@ -73,7 +79,9 @@ The default mappings are:
 | `<leader>ax` | Cancel the active ACP turn |
 | `<leader>aX` | Clear prompts waiting behind the active turn |
 
-The ACP process starts on the first prompt or terminal open. For a local agent, opening the terminal creates the ACP session when needed and attaches the native TUI to it. Closing the floating window only hides it; the terminal job and buffer remain alive.
+The `acpx` session starts on the first prompt. Opening the terminal launches the configured native command directly, without starting ACP. Closing the floating window only hides it; the terminal job and buffer remain alive.
+
+The native TUI and `acpx` use separate sessions. ACP agents such as Codex may lock a provider thread to one controlling application, so attempting to attach another native TUI can make it read-only. Conduit keeps the standalone terminal alive while `acpx` owns editor prompts, persistence, and cross-process coordination.
 
 You can also call the functions directly:
 
@@ -103,24 +111,27 @@ agent = {
   type = "local",
   cmd = { "opencode" },
   -- Derived defaults:
-  -- acp_cmd = { "opencode", "acp" }
-  -- terminal_cmd = { "opencode", "--session", session_id }
+  -- transport = "acpx"
+  -- terminal_cmd = { "opencode" }
 }
 ```
 
-Codex uses the `codex-acp` adapter, which must be installed separately:
+Codex uses the built-in `acpx codex` profile:
 
 ```lua
 agent = {
   name = "codex",
   type = "local",
-  cmd = { "codex" },
-  acp_cmd = { "codex-acp" },
-  -- Native terminal defaults to: codex resume <session_id>
+  cmd = { "wcodex" }, -- or { "codex" }
+  -- transport = "acpx"
+  -- client_cmd = { "acpx" }
+  -- permission_mode = "approve-all"
 }
 ```
 
-The Codex adapter uses its agent-owned prompt FIFO. Waiting prompts are sent immediately as concurrent ACP requests, appear with `queue_owner = "agent"` in status and events, and can be cancelled before they start with `clear_queue()`. Other adapters use Conduit's portable client-side FIFO unless `agent.queue_mode = "agent"` is explicitly configured.
+`permission_mode` can be `"approve-all"`, `"approve-reads"`, or `"deny-all"`. It defaults to `"approve-all"` so background coding turns can edit files and run tools; choose a stricter mode when desired.
+
+Set `transport = "direct"` to use Conduit's original in-process ACP client. In that mode, `acp_cmd` configures the adapter subprocess and the existing client/agent queue modes remain available.
 
 For another local agent, provide both commands. `terminal_cmd` may be a function receiving the ACP session ID:
 
@@ -128,6 +139,7 @@ For another local agent, provide both commands. `terminal_cmd` may be a function
 agent = {
   name = "custom",
   type = "local",
+  transport = "direct",
   acp_cmd = { "my-agent", "--acp" },
   terminal_cmd = function(session_id)
     return { "my-agent", "resume", session_id }
@@ -150,10 +162,10 @@ Remote ACP transport is not yet standardized across all agents. Override `acp_cm
 ### Workflow
 
 1. Press `<leader>aa` and enter a prompt containing any context placeholders.
-2. Conduit lazily starts the configured ACP agent and creates a project session.
-3. The expanded prompt is submitted with `session/prompt`.
+2. Conduit asks `acpx` to ensure the project session exists.
+3. The expanded prompt is submitted through `acpx` in strict JSON mode.
 4. When the turn finishes, Conduit safely checks changed project buffers and emits the `User ConduitTurnComplete` autocmd.
-5. Press `<leader>aA` to open the native terminal attached to the active Conduit session.
+5. Press `<leader>aA` to open the persistent native terminal.
 
 If no agent is configured, `ask` retains the original behavior and copies the expanded prompt to the `+` register.
 

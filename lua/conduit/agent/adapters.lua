@@ -27,12 +27,11 @@ local adapters = {
     acp_command = function(opts)
       return opts.acp_cmd or { "codex-acp" }
     end,
-    terminal_command = function(opts, session_id)
+    terminal_command = function(opts, _)
       if opts.terminal_cmd then
-        return type(opts.terminal_cmd) == "function" and opts.terminal_cmd(session_id) or opts.terminal_cmd
+        return type(opts.terminal_cmd) == "function" and opts.terminal_cmd(nil) or opts.terminal_cmd
       end
-      local command = opts.cmd or { "codex" }
-      return session_id and append(command, "resume", session_id) or copy(command)
+      return copy(opts.cmd or { "codex" })
     end,
   },
 }
@@ -82,12 +81,23 @@ function M.resolve(opts)
     end,
   }
 
+  local transport = opts.transport or (adapters[name] and "acpx" or "direct")
   return {
     kind = "local",
+    transport = transport,
+    agent_name = name,
+    client_command = copy(opts.client_cmd or { "acpx" }),
+    permission_mode = opts.permission_mode or "approve-all",
     acp_command = adapter.acp_command(opts),
-    queue_mode = opts.queue_mode or (name == "codex" and "agent" or "client"),
+    queue_mode = transport == "acpx" and "client" or (opts.queue_mode or (name == "codex" and "agent" or "client")),
     terminal_command = function(session_id)
-      return adapter.terminal_command(opts, session_id)
+      return adapter.terminal_command(opts, transport == "acpx" and nil or session_id)
+    end,
+    terminal_identity = function(session_id)
+      if transport == "acpx" then
+        return nil
+      end
+      return session_id
     end,
     env = opts.env,
   }

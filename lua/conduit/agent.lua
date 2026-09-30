@@ -178,6 +178,7 @@ local function get_instance()
     waiters = {},
     queue = {},
     native_queue = {},
+    acpx_waiters = {},
   }
   instances[cwd] = instance
   return instance
@@ -233,15 +234,169 @@ local function refresh(instance, stop_reason, before, turn_error, on_complete)
   end)
 end
 
+local run_acpx_next
+local turn_started
+
+local function acpx_command(instance, ...)
+  local command = vim.deepcopy(instance.adapter.client_command)
+  vim.list_extend(command, {
+    "--cwd", instance.cwd,
+    "--" .. instance.adapter.permission_mode,
+    "--format", "json",
+    "--json-strict",
+    instance.adapter.agent_name,
+  })
+  vim.list_extend(command, { ... })
+  return command
+end
+
+local function finish_acpx_ensure(instance, err)
+  local callbacks = instance.acpx_waiters
+  instance.acpx_waiters = {}
+  instance.acpx_ensuring = false
+  if err then
+    instance.state = "stopped"
+    for _, callback in ipairs(callbacks) do
+      callback(nil, err)
+    end
+    return
+  end
+  instance.acpx_ensured = true
+  instance.state = "ready"
+  emit("ConduitAgentReady", { cwd = instance.cwd, session_id = instance.session_id, transport = "acpx" })
+  for _, callback in ipairs(callbacks) do
+    callback(instance)
+  end
+end
+
+local function ensure_acpx(instance, callback)
+  if instance.acpx_ensured then
+    callback(instance)
+    return
+  end
+  table.insert(instance.acpx_waiters, callback)
+  if instance.acpx_ensuring then
+    return
+  end
+  instance.acpx_ensuring = true
+  instance.state = "starting"
+  emit("ConduitAgentStarting", { cwd = instance.cwd, transport = "acpx" })
+  local stdout = {}
+  local stderr = {}
+  local job = vim.fn.jobstart(acpx_command(instance, "sessions", "ensure"), {
+    cwd = instance.cwd,
+    env = instance.adapter.env,
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = function(_, data)
+      vim.list_extend(stdout, data or {})
+    end,
+    on_stderr = function(_, data)
+      vim.list_extend(stderr, data or {})
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        instance.acpx_ensure_job = nil
+        if code ~= 0 then
+          local message = table.concat(vim.tbl_filter(function(line) return line ~= "" end, stderr), "\n")
+          finish_acpx_ensure(instance, message ~= "" and message or ("acpx session ensure exited with code " .. code))
+          return
+        end
+        for _, line in ipairs(stdout) do
+          local ok, value = pcall(vim.json.decode, line)
+          if ok and type(value) == "table" and value.acpxSessionId then
+            instance.session_id = value.acpxSessionId
+          end
+        end
+        finish_acpx_ensure(instance)
+      end)
+    end,
+  })
+  if job <= 0 then
+    finish_acpx_ensure(instance, "acpx is not executable")
+    return
+  end
+  instance.acpx_ensure_job = job
+end
+
+run_acpx_next = function(instance)
+  if instance.state == "busy" or instance.refreshing or instance.finishing or #instance.queue == 0 then
+    return
+  end
+  ensure_acpx(instance, function(ready, ensure_err)
+    if not ready then
+      notify("Conduit: " .. ensure_err, vim.log.levels.ERROR)
+      return
+    end
+    if ready.state == "busy" or ready.refreshing or ready.finishing or #ready.queue == 0 then
+      return
+    end
+    local prompt = table.remove(ready.queue, 1)
+    local before = require("conduit.refresh").snapshot(ready.cwd)
+    ready.state = "busy"
+    ready.current_prompt = prompt
+    turn_started(ready, #ready.queue)
+    local stderr = {}
+    local job = vim.fn.jobstart(acpx_command(ready, "prompt", "--file", "-"), {
+      cwd = ready.cwd,
+      env = ready.adapter.env,
+      stdin = "pipe",
+      stdout_buffered = false,
+      stderr_buffered = true,
+      on_stdout = function(_, data)
+        for _, line in ipairs(data or {}) do
+          if line ~= "" then
+            local ok, value = pcall(vim.json.decode, line)
+            if ok and type(value) == "table" then
+              ready.last_update = value.params and value.params.update or value
+            end
+          end
+        end
+      end,
+      on_stderr = function(_, data)
+        vim.list_extend(stderr, data or {})
+      end,
+      on_exit = function(_, code)
+        vim.schedule(function()
+          ready.acpx_prompt_job = nil
+          ready.state = "ready"
+          ready.current_prompt = nil
+          ready.refreshing = true
+          local message
+          if code ~= 0 then
+            message = table.concat(vim.tbl_filter(function(line) return line ~= "" end, stderr), "\n")
+            if message == "" then
+              message = "acpx prompt exited with code " .. code
+            end
+          end
+          refresh(ready, code == 0 and "end_turn" or "error", before, message, function()
+            run_acpx_next(ready)
+          end)
+        end)
+      end,
+    })
+    if job <= 0 then
+      ready.state = "ready"
+      ready.current_prompt = nil
+      notify("Conduit: acpx is not executable", vim.log.levels.ERROR)
+      run_acpx_next(ready)
+      return
+    end
+    ready.acpx_prompt_job = job
+    vim.fn.chansend(job, prompt)
+    vim.fn.chanclose(job, "stdin")
+  end)
+end
+
 local run_next
 local finish_native_prompt
 
-local function turn_started(instance, queue_length)
+turn_started = function(instance, queue_length)
   emit("ConduitTurnStarted", {
     cwd = instance.cwd,
     session_id = instance.session_id,
     queue_length = queue_length,
-    queue_owner = instance.adapter.queue_mode,
+    queue_owner = instance.adapter.transport == "acpx" and "acpx" or instance.adapter.queue_mode,
   })
   notify("Conduit: agent is working")
 end
@@ -355,6 +510,25 @@ end
 
 ---@param prompt string
 function M.submit(prompt)
+  local acpx_instance, acpx_err = get_instance()
+  if acpx_instance and acpx_instance.adapter.transport == "acpx" then
+    table.insert(acpx_instance.queue, prompt)
+    if acpx_instance.state == "busy" or acpx_instance.refreshing or acpx_instance.finishing then
+      local count = #acpx_instance.queue
+      notify("Conduit: prompt queued (" .. count .. " waiting)")
+      emit("ConduitPromptQueued", {
+        cwd = acpx_instance.cwd,
+        session_id = acpx_instance.session_id,
+        queue_length = count,
+        queue_owner = "client",
+      })
+    end
+    run_acpx_next(acpx_instance)
+    return
+  elseif not acpx_instance then
+    notify("Conduit: " .. acpx_err, vim.log.levels.ERROR)
+    return
+  end
   ensure(function(instance, err)
     if not instance then
       notify("Conduit: " .. err, vim.log.levels.ERROR)
@@ -380,26 +554,38 @@ function M.submit(prompt)
 end
 
 function M.open_terminal()
-  ensure(function(instance, err)
-    if not instance then
-      notify("Conduit: " .. err, vim.log.levels.ERROR)
-      return
-    end
-    if instance.adapter.kind ~= "local" then
-      notify("Conduit: remote agents do not have a local terminal", vim.log.levels.WARN)
-      return
-    end
-    local command = instance.adapter.terminal_command(instance.session_id)
-    if not command or #command == 0 then
-      notify("Conduit: this agent has no terminal command", vim.log.levels.ERROR)
-      return
-    end
-    require("conduit.terminal").open(instance.cwd, command, instance.cwd, instance.session_id)
-  end)
+  local instance, err = get_instance()
+  if not instance then
+    notify("Conduit: " .. err, vim.log.levels.ERROR)
+    return
+  end
+  if instance.adapter.kind ~= "local" then
+    notify("Conduit: remote agents do not have a local terminal", vim.log.levels.WARN)
+    return
+  end
+  local command = instance.adapter.terminal_command(instance.session_id)
+  if not command or #command == 0 then
+    notify("Conduit: this agent has no terminal command", vim.log.levels.ERROR)
+    return
+  end
+  local identity = instance.session_id
+  if instance.adapter.terminal_identity then
+    identity = instance.adapter.terminal_identity(instance.session_id)
+  end
+  require("conduit.terminal").open(instance.cwd, command, instance.cwd, identity)
 end
 
 function M.cancel()
   local instance = get_instance()
+  if instance and instance.adapter.transport == "acpx" and instance.state == "busy" then
+    vim.fn.jobstart(acpx_command(instance, "cancel"), {
+      cwd = instance.cwd,
+      env = instance.adapter.env,
+      detach = true,
+    })
+    notify("Conduit: cancellation requested")
+    return
+  end
   if instance and instance.rpc and instance.session_id and instance.state == "busy" then
     instance.rpc:notify("session/cancel", { sessionId = instance.session_id })
     notify("Conduit: cancellation requested")
@@ -438,6 +624,12 @@ function M.stop_all()
     if instance.rpc then
       instance.rpc:stop()
     end
+    if instance.acpx_ensure_job then
+      pcall(vim.fn.jobstop, instance.acpx_ensure_job)
+    end
+    if instance.acpx_prompt_job then
+      pcall(vim.fn.jobstop, instance.acpx_prompt_job)
+    end
   end
   require("conduit.terminal").stop_all()
 end
@@ -455,6 +647,7 @@ function M.status()
     queue_owner = instance.adapter.queue_mode,
     busy = instance.state == "busy" or instance.refreshing or false,
     steering_supported = instance.steering_supported or false,
+    transport = instance.adapter.transport or "direct",
   }
 end
 
