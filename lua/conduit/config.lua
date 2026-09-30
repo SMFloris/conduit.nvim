@@ -35,7 +35,7 @@ vim.g.conduit_opts = vim.g.conduit_opts
 ---@field name? "opencode"|"codex"|string
 ---@field cmd? string[] Native terminal command for built-in local adapters.
 ---@field acp_cmd? string[] ACP subprocess or remote bridge command.
----@field terminal_cmd? string[]|fun(session_id: string): string[]
+---@field terminal_cmd? string[]|fun(session_id: string|nil): string[]
 ---@field cwd? string|fun(): string
 ---@field env? table<string, string>
 ---@field url? string

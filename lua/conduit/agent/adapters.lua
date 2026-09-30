@@ -16,15 +16,23 @@ local adapters = {
       return opts.acp_cmd or append(opts.cmd or { "opencode" }, "acp")
     end,
     terminal_command = function(opts, session_id)
-      return opts.terminal_cmd or append(opts.cmd or { "opencode" }, "--session", session_id)
+      if opts.terminal_cmd then
+        return type(opts.terminal_cmd) == "function" and opts.terminal_cmd(session_id) or opts.terminal_cmd
+      end
+      local command = opts.cmd or { "opencode" }
+      return session_id and append(command, "--session", session_id) or copy(command)
     end,
   },
   codex = {
     acp_command = function(opts)
       return opts.acp_cmd or { "codex-acp" }
     end,
-    terminal_command = function(opts, _)
-      return opts.terminal_cmd or copy(opts.cmd or { "codex" })
+    terminal_command = function(opts, session_id)
+      if opts.terminal_cmd then
+        return type(opts.terminal_cmd) == "function" and opts.terminal_cmd(session_id) or opts.terminal_cmd
+      end
+      local command = opts.cmd or { "codex" }
+      return session_id and append(command, "resume", session_id) or copy(command)
     end,
   },
 }
@@ -79,9 +87,6 @@ function M.resolve(opts)
     acp_command = adapter.acp_command(opts),
     queue_mode = opts.queue_mode or (name == "codex" and "agent" or "client"),
     terminal_command = function(session_id)
-      if type(opts.terminal_cmd) == "function" then
-        return opts.terminal_cmd(session_id)
-      end
       return adapter.terminal_command(opts, session_id)
     end,
     env = opts.env,

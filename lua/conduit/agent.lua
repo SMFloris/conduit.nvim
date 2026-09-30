@@ -380,22 +380,21 @@ function M.submit(prompt)
 end
 
 function M.open_terminal()
-  ensure(function(instance, err)
-    if not instance then
-      notify("Conduit: " .. err, vim.log.levels.ERROR)
-      return
-    end
-    if instance.adapter.kind ~= "local" then
-      notify("Conduit: remote agents do not have a local terminal", vim.log.levels.WARN)
-      return
-    end
-    local command = instance.adapter.terminal_command(instance.session_id)
-    if not command or #command == 0 then
-      notify("Conduit: this agent has no terminal command", vim.log.levels.ERROR)
-      return
-    end
-    require("conduit.terminal").open(instance.cwd, command, instance.cwd, instance.session_id)
-  end)
+  local instance, err = get_instance()
+  if not instance then
+    notify("Conduit: " .. err, vim.log.levels.ERROR)
+    return
+  end
+  if instance.adapter.kind ~= "local" then
+    notify("Conduit: remote agents do not have a local terminal", vim.log.levels.WARN)
+    return
+  end
+  local command = instance.adapter.terminal_command(instance.session_id)
+  if not command or #command == 0 then
+    notify("Conduit: this agent has no terminal command", vim.log.levels.ERROR)
+    return
+  end
+  require("conduit.terminal").open(instance.cwd, command, instance.cwd, instance.session_id)
 end
 
 function M.cancel()
