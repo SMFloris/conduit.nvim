@@ -116,7 +116,7 @@ agent = {
   type = "local",
   cmd = { "codex" },
   acp_cmd = { "codex-acp" },
-  -- Native terminal defaults to: codex resume <session_id>
+  -- Native terminal defaults to the configured command: codex
 }
 ```
 

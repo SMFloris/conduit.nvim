@@ -23,8 +23,8 @@ local adapters = {
     acp_command = function(opts)
       return opts.acp_cmd or { "codex-acp" }
     end,
-    terminal_command = function(opts, session_id)
-      return opts.terminal_cmd or append(opts.cmd or { "codex" }, "resume", session_id)
+    terminal_command = function(opts, _)
+      return opts.terminal_cmd or copy(opts.cmd or { "codex" })
     end,
   },
 }
