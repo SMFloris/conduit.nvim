@@ -73,7 +73,7 @@ The default mappings are:
 | `<leader>ax` | Cancel the active ACP turn |
 | `<leader>aX` | Clear prompts waiting behind the active turn |
 
-The ACP process starts on the first prompt. For a local agent, opening the terminal attaches to the active ACP session when one exists; otherwise it launches the native TUI without a session ID. Closing the floating window only hides it; the terminal job and buffer remain alive.
+The ACP process starts on the first prompt or terminal open. For a local agent, opening the terminal creates the ACP session when needed and attaches the native TUI to it. Closing the floating window only hides it; the terminal job and buffer remain alive.
 
 You can also call the functions directly:
 
@@ -116,8 +116,7 @@ agent = {
   type = "local",
   cmd = { "codex" },
   acp_cmd = { "codex-acp" },
-  -- With an active Conduit session: codex resume <session_id>
-  -- Without one: codex
+  -- Native terminal defaults to: codex resume <session_id>
 }
 ```
 
@@ -154,7 +153,7 @@ Remote ACP transport is not yet standardized across all agents. Override `acp_cm
 2. Conduit lazily starts the configured ACP agent and creates a project session.
 3. The expanded prompt is submitted with `session/prompt`.
 4. When the turn finishes, Conduit safely checks changed project buffers and emits the `User ConduitTurnComplete` autocmd.
-5. Press `<leader>aA` to open the native terminal. It resumes the active Conduit session when available, or starts normally otherwise.
+5. Press `<leader>aA` to open the native terminal attached to the active Conduit session.
 
 If no agent is configured, `ask` retains the original behavior and copies the expanded prompt to the `+` register.
 
