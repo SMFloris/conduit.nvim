@@ -11,7 +11,7 @@ vim.g.conduit_opts = vim.g.conduit_opts
 ---@field auto_register_cmp_sources? string[]
 ---
 ---A prefix that's automatically added to the start of file paths
----@field filePrefix? string
+---@field file_prefix? string
 ---
 ---Set to false to disable notifications
 ---@field notify? boolean
@@ -25,10 +25,49 @@ vim.g.conduit_opts = vim.g.conduit_opts
 ---Input options for `ask` — see [snacks.input](https://github.com/folke/snacks.nvim/blob/main/docs/input.md) (if enabled).
 ---@diagnostic disable-next-line: undefined-doc-name
 ---@field input? snacks.input.Opts
+---@field agent? conduit.AgentOpts
+---@field keymaps? false|table
+---@field terminal? table
+---@field root_markers? string[]
+---@field history? table
+---@class conduit.AgentOpts
+---@field type? "local"|"remote"
+---@field name? "opencode"|"codex"|string
+---@field cmd? string[] Native terminal command for built-in local adapters.
+---@field acp_cmd? string[] ACP subprocess or remote bridge command.
+---@field terminal_cmd? string[]|fun(session_id: string): string[]
+---@field cwd? string|fun(): string
+---@field env? table<string, string>
+---@field url? string
+---@field headers? table<string, string>
+---@field queue_mode? "client"|"agent" Send concurrent prompts only when the adapter supports an agent-owned FIFO.
 local defaults = {
   file_prefix = "@",
   notify = true,
   auto_register_cmp_sources = { "conduit" },
+  -- Agent support is opt-in. With no agent configured, `ask` keeps the legacy
+  -- behaviour and copies the expanded prompt to the clipboard.
+  agent = nil,
+  keymaps = {
+    ask = "<leader>aa",
+    toggle = "<leader>aA",
+    prompts = "<leader>ap",
+    cancel = "<leader>ax",
+    clear_queue = "<leader>aX",
+  },
+  root_markers = { ".git", "pyproject.toml", "package.json", "Cargo.toml", "go.mod" },
+  history = {
+    enabled = true,
+    persist = true,
+    max_entries = 100,
+  },
+  terminal = {
+    width = 0.85,
+    height = 0.85,
+    border = "rounded",
+    title = " Conduit agent ",
+    title_pos = "center",
+  },
   contexts = {
     ---@class conduit.Context
     ---@field description string Description of the context. Shown in completion docs.
@@ -109,6 +148,8 @@ local defaults = {
         filetype = "conduit_ask",
       },
       on_buf = function(win)
+        require("conduit.history").setup_buffer(win.buf)
+
         -- Wait as long as possible to check for `blink.cmp` loaded - many users lazy-load on `InsertEnter`.
         -- And OptionSet :runtimepath didn't seem to fire for lazy.nvim.
         vim.api.nvim_create_autocmd("InsertEnter", {
@@ -136,8 +177,28 @@ local defaults = {
 
 ---@module 'snacks'
 
----Plugin options, lazily merged from `defaults` and `vim.g.conduit_opts`.
+local function merge(opts)
+  local result = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
+  -- Lists are configuration values, not maps; replacing them avoids retaining
+  -- trailing entries from a longer default list.
+  if opts and opts.root_markers then
+    result.root_markers = vim.deepcopy(opts.root_markers)
+  end
+  return result
+end
+
+---Plugin options, merged from `defaults` and `vim.g.conduit_opts`.
 ---@type conduit.Opts
-M.opts = vim.tbl_deep_extend("force", vim.deepcopy(defaults), vim.g.conduit_opts or {})
+M.opts = merge(vim.g.conduit_opts)
+
+---@param opts? conduit.Opts
+function M.setup(opts)
+  vim.g.conduit_opts = vim.tbl_deep_extend("force", vim.g.conduit_opts or {}, opts or {})
+  if opts and opts.root_markers then
+    vim.g.conduit_opts.root_markers = vim.deepcopy(opts.root_markers)
+  end
+  M.opts = merge(vim.g.conduit_opts)
+  return M.opts
+end
 
 return M
