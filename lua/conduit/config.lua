@@ -56,6 +56,7 @@ local defaults = {
     toggle = "<leader>aA",
     prompts = "<leader>ap",
     modified_files = "<leader>ah",
+    models = "<leader>am",
     cancel = "<leader>ax",
     clear_queue = "<leader>aX",
   },

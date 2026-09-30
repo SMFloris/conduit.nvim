@@ -26,6 +26,9 @@ local function set_keymaps()
   if keymaps.modified_files then
     vim.keymap.set("n", keymaps.modified_files, M.modified_files, { desc = "Latest files modified by Conduit agent" })
   end
+  if keymaps.models then
+    vim.keymap.set("n", keymaps.models, M.select_model, { desc = "Select Conduit agent model" })
+  end
   if keymaps.cancel then
     vim.keymap.set("n", keymaps.cancel, M.cancel, { desc = "Cancel Conduit agent turn" })
   end
@@ -183,6 +186,35 @@ function M.modified_files()
       return
     end
     vim.cmd.edit(vim.fn.fnameescape(path))
+  end)
+end
+
+function M.select_model()
+  require("conduit.agent").models(function(models, current, err)
+    if err then
+      vim.notify("Conduit: " .. err, vim.log.levels.ERROR)
+      return
+    end
+    if not models or #models == 0 then
+      vim.notify("Conduit: this agent did not advertise any models", vim.log.levels.WARN)
+      return
+    end
+    vim.ui.select(models, {
+      prompt = "Conduit model: ",
+      format_item = function(model)
+        local marker = model.id == current and "● " or "  "
+        local label = model.name or model.id
+        if label ~= model.id then
+          label = label .. " (" .. model.id .. ")"
+        end
+        return marker .. label
+      end,
+    }, function(model)
+      if not model or model.id == current then
+        return
+      end
+      require("conduit.agent").set_model(model.id)
+    end)
   end)
 end
 

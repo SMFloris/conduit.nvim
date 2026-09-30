@@ -26,6 +26,60 @@ local function error_message(err)
   return tostring(err)
 end
 
+local function model_config_option(config_options)
+  local selected, selected_priority
+  for _, option in ipairs(config_options or {}) do
+    if option.type == "select" and (option.category == "model" or option.id == "model") then
+      local priority = option.category == "model" and (option.id == "model" and 2 or 1) or 0
+      if not selected or priority > selected_priority then
+        selected, selected_priority = option, priority
+      end
+    end
+  end
+  return selected
+end
+
+local function models_from_option(option)
+  if not option then
+    return {}, nil
+  end
+  local models = {}
+  for _, entry in ipairs(option.options or {}) do
+    if entry.value then
+      table.insert(models, { id = entry.value, name = entry.name or entry.value, description = entry.description })
+    else
+      for _, nested in ipairs(entry.options or {}) do
+        if nested.value then
+          table.insert(models, {
+            id = nested.value,
+            name = nested.name or nested.value,
+            description = nested.description,
+            group = entry.name,
+          })
+        end
+      end
+    end
+  end
+  return models, option.currentValue
+end
+
+local function models_from_legacy(state)
+  if not state or type(state.availableModels) ~= "table" then
+    return {}, nil
+  end
+  local models = {}
+  for _, model in ipairs(state.availableModels) do
+    if type(model) == "table" and model.modelId then
+      table.insert(models, {
+        id = model.modelId,
+        name = model.name or model.modelId,
+        description = model.description,
+      })
+    end
+  end
+  return models, state.currentModelId
+end
+
 local function fail(instance, message)
   instance.state = "stopped"
   if instance.rpc then
@@ -98,6 +152,8 @@ local function initialize(instance)
         return
       end
       instance.session_id = session.sessionId
+      instance.config_options = session.configOptions or {}
+      instance.legacy_models = session.models
       instance.state = "ready"
       emit("ConduitAgentReady", { cwd = instance.cwd, session_id = instance.session_id })
       local callbacks = instance.waiters
@@ -120,6 +176,9 @@ local function start(instance)
     on_notification = function(method, params)
       if method == "session/update" then
         instance.last_update = params.update
+        if params.update and params.update.sessionUpdate == "config_option_update" then
+          instance.config_options = params.update.configOptions or {}
+        end
       end
     end,
     on_stderr = function(line)
@@ -261,6 +320,53 @@ local function acpx_watch_command(instance)
     "sessions", "watch",
   })
   return command
+end
+
+local function acpx_json_command(instance, arguments, callback)
+  local stdout, stderr = {}, {}
+  local command = acpx_command(instance)
+  vim.list_extend(command, arguments)
+  local job = vim.fn.jobstart(command, {
+    cwd = instance.cwd,
+    env = instance.adapter.env,
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = function(_, data)
+      vim.list_extend(stdout, data or {})
+    end,
+    on_stderr = function(_, data)
+      vim.list_extend(stderr, data or {})
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        local errors = table.concat(vim.tbl_filter(function(line) return line ~= "" end, stderr), "\n")
+        local result
+        for index = #stdout, 1, -1 do
+          if stdout[index] ~= "" then
+            local ok, value = pcall(vim.json.decode, stdout[index])
+            if ok and type(value) == "table" then
+              result = value
+              break
+            end
+          end
+        end
+        if code ~= 0 then
+          local json_error = result and result.error
+          local message = type(json_error) == "table" and json_error.message or json_error
+          callback(nil, message or (errors ~= "" and errors) or ("acpx exited with code " .. code))
+          return
+        end
+        if result then
+          callback(result)
+          return
+        end
+        callback(nil, errors ~= "" and errors or "acpx returned no JSON result")
+      end)
+    end,
+  })
+  if job <= 0 then
+    callback(nil, "acpx is not executable")
+  end
 end
 
 local function finish_acpx_ensure(instance, err)
@@ -643,6 +749,130 @@ function M.clear_queue()
   return count
 end
 
+---@param callback fun(models: table[]|nil, current: string|nil, err: string|nil)
+function M.models(callback)
+  local instance, err = get_instance()
+  if not instance then
+    callback(nil, nil, err)
+    return
+  end
+  if instance.adapter.transport == "acpx" then
+    ensure_acpx(instance, function(ready, ensure_err)
+      if not ready then
+        callback(nil, nil, ensure_err)
+        return
+      end
+      acpx_json_command(ready, { "status" }, function(result, command_err)
+        if not result then
+          callback(nil, nil, command_err)
+          return
+        end
+        local models = {}
+        for _, id in ipairs(result.availableModels or {}) do
+          table.insert(models, { id = id, name = id })
+        end
+        ready.model = result.model
+        callback(models, result.model)
+      end)
+    end)
+    return
+  end
+  ensure(function(ready, ensure_err)
+    if not ready then
+      callback(nil, nil, ensure_err)
+      return
+    end
+    local option = model_config_option(ready.config_options)
+    local models, current = models_from_option(option)
+    if not option then
+      models, current = models_from_legacy(ready.legacy_models)
+    end
+    ready.model = current
+    callback(models, current)
+  end)
+end
+
+---@param model_id string
+---@param callback? fun(ok: boolean, err: string|nil)
+function M.set_model(model_id, callback)
+  callback = callback or function() end
+  local instance, err = get_instance()
+  if not instance then
+    notify("Conduit: " .. err, vim.log.levels.ERROR)
+    callback(false, err)
+    return
+  end
+  local function changed(ready, result)
+    ready.model = model_id
+    if result and result.configOptions then
+      ready.config_options = result.configOptions
+    else
+      local option = model_config_option(ready.config_options)
+      if option then
+        option.currentValue = model_id
+      end
+    end
+    if ready.legacy_models then
+      ready.legacy_models.currentModelId = model_id
+    end
+    emit("ConduitModelChanged", { cwd = ready.cwd, session_id = ready.session_id, model = model_id })
+    notify("Conduit: model set to " .. model_id)
+    callback(true)
+  end
+  if instance.adapter.transport == "acpx" then
+    ensure_acpx(instance, function(ready, ensure_err)
+      if not ready then
+        notify("Conduit: " .. ensure_err, vim.log.levels.ERROR)
+        callback(false, ensure_err)
+        return
+      end
+      acpx_json_command(ready, { "set", "model", model_id }, function(result, command_err)
+        if not result then
+          notify("Conduit: could not set model: " .. command_err, vim.log.levels.ERROR)
+          callback(false, command_err)
+          return
+        end
+        changed(ready, result)
+      end)
+    end)
+    return
+  end
+  ensure(function(ready, ensure_err)
+    if not ready then
+      notify("Conduit: " .. ensure_err, vim.log.levels.ERROR)
+      callback(false, ensure_err)
+      return
+    end
+    local option = model_config_option(ready.config_options)
+    if not option and not ready.legacy_models then
+      local message = "this agent did not advertise model selection"
+      notify("Conduit: " .. message, vim.log.levels.WARN)
+      callback(false, message)
+      return
+    end
+    local method = option and "session/set_config_option" or "session/set_model"
+    local params = option and {
+      sessionId = ready.session_id,
+      configId = option.id,
+      value = model_id,
+    } or {
+      sessionId = ready.session_id,
+      modelId = model_id,
+    }
+    ready.rpc:request(method, params, function(result, set_err)
+      vim.schedule(function()
+        if set_err then
+          local message = error_message(set_err)
+          notify("Conduit: could not set model: " .. message, vim.log.levels.ERROR)
+          callback(false, message)
+          return
+        end
+        changed(ready, result)
+      end)
+    end)
+  end)
+end
+
 function M.stop_all()
   for _, instance in pairs(instances) do
     if instance.rpc then
@@ -672,6 +902,7 @@ function M.status()
     queue_owner = instance.adapter.queue_mode,
     queued_prompts = vim.deepcopy(instance.queue),
     current_prompt = instance.current_prompt,
+    model = instance.model,
     last_changed_files = vim.deepcopy(instance.last_changed_files or {}),
     busy = instance.state == "busy" or instance.refreshing or false,
     steering_supported = instance.steering_supported or false,
