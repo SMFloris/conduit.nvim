@@ -23,6 +23,9 @@ local function set_keymaps()
   if keymaps.prompts then
     vim.keymap.set({ "n", "v" }, keymaps.prompts, M.select_prompt, { desc = "Select Conduit prompt" })
   end
+  if keymaps.modified_files then
+    vim.keymap.set("n", keymaps.modified_files, M.modified_files, { desc = "Latest files modified by Conduit agent" })
+  end
   if keymaps.cancel then
     vim.keymap.set("n", keymaps.cancel, M.cancel, { desc = "Cancel Conduit agent turn" })
   end
@@ -151,6 +154,36 @@ end
 
 function M.status()
   return require("conduit.agent").status()
+end
+
+function M.modified_files()
+  local status = require("conduit.agent").status()
+  local files = status.last_changed_files or {}
+  if #files == 0 then
+    vim.notify("Conduit: the latest agent turn did not modify project files", vim.log.levels.INFO)
+    return
+  end
+  local root = status.cwd or require("conduit.project").root()
+  vim.ui.select(files, {
+    prompt = "Latest agent-modified files: ",
+    format_item = function(path)
+      local relative = path
+      local prefix = vim.fs.normalize(root) .. "/"
+      if path:sub(1, #prefix) == prefix then
+        relative = path:sub(#prefix + 1)
+      end
+      return vim.uv.fs_stat(path) and relative or (relative .. " (deleted)")
+    end,
+  }, function(path)
+    if not path then
+      return
+    end
+    if not vim.uv.fs_stat(path) then
+      vim.notify("Conduit: file no longer exists: " .. path, vim.log.levels.WARN)
+      return
+    end
+    vim.cmd.edit(vim.fn.fnameescape(path))
+  end)
 end
 
 return M

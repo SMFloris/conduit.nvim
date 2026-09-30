@@ -20,10 +20,32 @@ local function project_buffers(root)
   return result
 end
 
+local function command_files(command, root)
+  local result = vim.system(command, { cwd = root, text = false }):wait()
+  if result.code ~= 0 then
+    return nil
+  end
+  return vim.tbl_filter(function(path)
+    return path ~= ""
+  end, vim.split(result.stdout or "", "\0", { plain = true }))
+end
+
+local function project_files(root)
+  local relative = command_files({ "git", "ls-files", "-co", "--exclude-standard", "-z" }, root)
+  if not relative then
+    relative = command_files({ "rg", "--files", "--hidden", "-g", "!.git", "-0" }, root) or {}
+  end
+  local result = {}
+  for _, path in ipairs(relative) do
+    result[vim.fs.normalize(root .. "/" .. path)] = true
+  end
+  return result
+end
+
 function M.snapshot(root)
   local result = {}
-  for _, item in ipairs(project_buffers(root)) do
-    result[item.path] = signature(item.path)
+  for path in pairs(project_files(root)) do
+    result[path] = signature(path)
   end
   return result
 end
@@ -37,11 +59,24 @@ function M.run(root, before)
     }
   end
 
-  local changed = {}
+  local after = M.snapshot(root)
+  local changed_set = {}
+  for path, current in pairs(after) do
+    if before[path] ~= current then
+      changed_set[path] = true
+    end
+  end
+  for path in pairs(before) do
+    if after[path] == nil then
+      changed_set[path] = true
+    end
+  end
+
+  local changed = vim.tbl_keys(changed_set)
+  table.sort(changed)
   local skipped = {}
   for _, item in ipairs(project_buffers(root)) do
-    if before[item.path] ~= signature(item.path) then
-      table.insert(changed, item.path)
+    if changed_set[item.path] then
       if vim.bo[item.buf].modified then
         table.insert(skipped, item.path)
       else

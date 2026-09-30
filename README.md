@@ -77,10 +77,11 @@ The default mappings are:
 | `<leader>aa` | Enter a prompt and submit it over ACP |
 | `<leader>aA` | Open or focus the ACP session dashboard |
 | `<leader>ap` | Select a prompt from the prompt library |
+| `<leader>ah` | Pick from files modified by the latest agent turn |
 | `<leader>ax` | Cancel the active ACP turn |
 | `<leader>aX` | Clear prompts waiting behind the active turn |
 
-Opening the dashboard ensures the project session exists and starts a persistent `acpx sessions watch` process. The top pane shows the live transcript, the bottom pane submits prompts with `<CR>` or `<C-s>`, and the sidebar shows the active and queued prompts. Type `@` in the prompt pane to fuzzy-find a project file. Press `<C-q>` from any pane, or `q` in normal mode, to hide the dashboard; `<leader>aA` reopens the same watcher and buffers.
+Opening the dashboard ensures the project session exists and starts a persistent `acpx sessions watch` process. The top pane renders a themed live transcript with prompts, thinking, tool status, replies, and turn results while hiding ACP transport noise; it always stays at the newest line. The bottom pane submits prompts with `<CR>` or `<C-s>`, and the sidebar shows the active and queued prompts. Type `@` in the prompt pane to fuzzy-find a project file. Press `<Esc>` or `<C-q>` from any pane, or `q` in normal mode, to hide the dashboard; `<leader>aA` reopens the same watcher and buffers.
 
 You can also call the functions directly:
 
@@ -177,6 +178,7 @@ If no agent is configured, `ask` retains the original behavior and copies the ex
 | `cancel` | Cancel the active ACP turn |
 | `clear_queue` | Remove pending prompts and return how many were removed |
 | `status` | Return the current project agent's state and session ID |
+| `modified_files` | Pick and open a file modified by the latest completed agent turn |
 | `prompt` | Legacy helper that expands a prompt and copies it to the clipboard |
 | `select_prompt` | Open the prompt picker, or submit a prompt by key |
 

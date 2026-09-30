@@ -212,6 +212,7 @@ local function refresh(instance, stop_reason, before, turn_error, on_complete)
     if #skipped > 0 then
       notify("Conduit: kept " .. #skipped .. " modified buffer(s) unchanged", vim.log.levels.WARN)
     end
+    instance.last_changed_files = vim.deepcopy(changed)
     instance.refreshing = false
     instance.finishing = true
     emit("ConduitTurnComplete", {
@@ -254,7 +255,8 @@ local function acpx_watch_command(instance)
   local command = vim.deepcopy(instance.adapter.client_command)
   vim.list_extend(command, {
     "--cwd", instance.cwd,
-    "--format", "text",
+    "--format", "json",
+    "--json-strict",
     instance.adapter.agent_name,
     "sessions", "watch",
   })
@@ -670,6 +672,7 @@ function M.status()
     queue_owner = instance.adapter.queue_mode,
     queued_prompts = vim.deepcopy(instance.queue),
     current_prompt = instance.current_prompt,
+    last_changed_files = vim.deepcopy(instance.last_changed_files or {}),
     busy = instance.state == "busy" or instance.refreshing or false,
     steering_supported = instance.steering_supported or false,
     transport = instance.adapter.transport or "direct",
