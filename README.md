@@ -228,6 +228,19 @@ history = {
 }
 ```
 
+The prompt uses a stable 60-column width and stays above the cursor by default. With Snacks input enabled, it can instead be centered in the editor:
+
+```lua
+input = {
+  placement = "center", -- "cursor" by default
+  win = {
+    width = 72, -- 60 by default
+  },
+}
+```
+
+Set `input.expand = true` to restore Snacks' content-driven width expansion.
+
 When a turn finishes, Conduit checks only loaded buffers belonging to that project. Window views and cursor positions are restored after reload; buffers with unsaved changes are left untouched and reported.
 
 ### Events

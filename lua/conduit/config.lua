@@ -22,9 +22,11 @@ vim.g.conduit_opts = vim.g.conduit_opts
 ---Prompts to select from.
 ---@field prompts? table<string, conduit.Prompt>
 ---
+---@class conduit.InputOpts: snacks.input.Opts
+---@field placement? "cursor"|"center" Place the prompt above the cursor or in the center of the editor.
 ---Input options for `ask` — see [snacks.input](https://github.com/folke/snacks.nvim/blob/main/docs/input.md) (if enabled).
 ---@diagnostic disable-next-line: undefined-doc-name
----@field input? snacks.input.Opts
+---@field input? conduit.InputOpts
 ---@field agent? conduit.AgentOpts
 ---@field keymaps? false|table
 ---@field terminal? table
@@ -134,17 +136,19 @@ local defaults = {
     },
   },
   input = {
+    placement = "cursor",
     prompt = "Prompt conduit: ",
     highlight = require("conduit.input").highlight,
     -- Options below here only apply to [snacks.input](https://github.com/folke/snacks.nvim/blob/main/docs/input.md).
     icon = "󰊠 ",
     -- completion = "customlist,v:lua.require'conduit.cmp.omni'",
     completion = "customlist,v:lua.require'conduit.cmp.omni'",
-    expand = true,
+    expand = false,
     win = {
       title_pos = "left",
       relative = "cursor",
       height = 1,
+      width = 60,
       row = -3, -- Row above the cursor
       col = 0,  -- Align with the cursor
       b = {

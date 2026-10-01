@@ -8,10 +8,20 @@ local M = {}
 ---@param default? string Optional text to prefill the input field
 ---@param on_confirm fun(value: string|nil) Callback function called when input is confirmed or cancelled
 function M.input(default, on_confirm)
+  local opts = vim.deepcopy(require("conduit.config").opts.input)
+  local placement = opts.placement or "cursor"
+  opts.placement = nil
+  opts.default = default
+  if placement == "center" then
+    opts.win = opts.win or {}
+    opts.win.relative = "editor"
+    -- A false position overrides Snacks' style defaults and is resolved to the
+    -- centered numeric coordinate before nvim_open_win receives the config.
+    opts.win.row = false
+    opts.win.col = false
+  end
   vim.ui.input(
-    vim.tbl_deep_extend("force", require("conduit.config").opts.input, {
-      default = default,
-    }),
+    opts,
     on_confirm
   )
 end
