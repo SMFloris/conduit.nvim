@@ -3,6 +3,7 @@ local M = {}
 local dashboards = {}
 local autocmds_installed = false
 local transcript_ns = vim.api.nvim_create_namespace("ConduitTranscript")
+local queue_ns = vim.api.nvim_create_namespace("ConduitQueue")
 
 local function setup_highlights()
   local links = {
@@ -16,6 +17,12 @@ local function setup_highlights()
     ConduitComplete = "DiagnosticOk",
     ConduitError = "DiagnosticError",
     ConduitMuted = "NonText",
+    ConduitQueueSection = "Comment",
+    ConduitQueueActive = "DiagnosticWarn",
+    ConduitQueueReady = "DiagnosticOk",
+    ConduitQueueItem = "Normal",
+    ConduitQueueEmpty = "NonText",
+    ConduitPromptBorder = "DiagnosticInfo",
   }
   for name, link in pairs(links) do
     vim.api.nvim_set_hl(0, name, { default = true, link = link })
@@ -114,8 +121,11 @@ local function render_transcript(dashboard)
   if not dashboard.watch_buf or not vim.api.nvim_buf_is_valid(dashboard.watch_buf) then
     return
   end
-  local lines, highlights = {}, {}
+  local lines, highlights = { "" }, {}
   local function line(text, highlight)
+    if text ~= "" then
+      text = "  " .. text
+    end
     table.insert(lines, text)
     if highlight then
       table.insert(highlights, { #lines - 1, highlight })
@@ -176,9 +186,11 @@ local function render_transcript(dashboard)
       line(item.text or "", "ConduitMuted")
     end
   end
-  if #lines == 0 then
-    lines = { "Waiting for agent activity…" }
-    highlights = { { 0, "ConduitMuted" } }
+  if rendered == 0 then
+    lines = { "", "  Waiting for agent activity…", "" }
+    highlights = { { 1, "ConduitMuted" } }
+  else
+    table.insert(lines, "")
   end
   vim.bo[dashboard.watch_buf].modifiable = true
   vim.api.nvim_buf_set_lines(dashboard.watch_buf, 0, -1, false, lines)
@@ -334,27 +346,49 @@ local function render_queue(dashboard)
   end
   local status = require("conduit.agent").status()
   local width = dashboard.queue_width or 30
-  local lines = {
-    status.busy and "● working" or (status.state == "starting" and "◐ starting" or "○ " .. status.state),
-    "",
-    "ACTIVE",
-  }
-  if status.current_prompt then
-    table.insert(lines, short_prompt(status.current_prompt, width - 2))
-  else
-    table.insert(lines, "—")
+  local lines, highlights = {}, {}
+  local function line(text, highlight)
+    table.insert(lines, text)
+    if highlight then
+      table.insert(highlights, { #lines - 1, highlight })
+    end
   end
-  table.insert(lines, "")
-  table.insert(lines, string.format("QUEUE (%d)", #(status.queued_prompts or {})))
+  line("  AGENT", "ConduitQueueSection")
+  if status.busy then
+    line("  ●  Working", "ConduitQueueActive")
+  elseif status.state == "starting" then
+    line("  ◐  Starting", "ConduitQueueActive")
+  elseif status.state == "ready" then
+    line("  ●  Ready", "ConduitQueueReady")
+  else
+    local state = status.state:sub(1, 1):upper() .. status.state:sub(2)
+    line("  ○  " .. state, "ConduitQueueEmpty")
+  end
+  line("")
+  line("  ACTIVE", "ConduitQueueSection")
+  if status.current_prompt then
+    line("  " .. short_prompt(status.current_prompt, width - 4), "ConduitQueueItem")
+  else
+    line("  Nothing running", "ConduitQueueEmpty")
+  end
+  line("")
+  line(string.format("  QUEUED  %d", #(status.queued_prompts or {})), "ConduitQueueSection")
   for index, prompt in ipairs(status.queued_prompts or {}) do
-    table.insert(lines, string.format("%d. %s", index, short_prompt(prompt, width - 5)))
+    line(string.format("  %02d  %s", index, short_prompt(prompt, width - 8)), "ConduitQueueItem")
   end
   if #(status.queued_prompts or {}) == 0 then
-    table.insert(lines, "—")
+    line("  Queue is empty", "ConduitQueueEmpty")
   end
   vim.bo[dashboard.queue_buf].modifiable = true
   vim.api.nvim_buf_set_lines(dashboard.queue_buf, 0, -1, false, lines)
+  vim.api.nvim_buf_clear_namespace(dashboard.queue_buf, queue_ns, 0, -1)
+  for _, value in ipairs(highlights) do
+    vim.api.nvim_buf_add_highlight(dashboard.queue_buf, queue_ns, value[2], value[1], 0, -1)
+  end
   vim.bo[dashboard.queue_buf].modifiable = false
+  if valid_win(dashboard.queue_win) then
+    pcall(vim.api.nvim_win_set_cursor, dashboard.queue_win, { 1, 0 })
+  end
 end
 
 local function render_all()
@@ -572,25 +606,33 @@ local function open_windows(dashboard)
 
   dashboard.watch_win = vim.api.nvim_open_win(dashboard.watch_buf, false, {
     relative = "editor", row = row, col = col, width = main_width, height = watch_height,
-    style = "minimal", border = opts.border, title = " ACP session ", title_pos = "center",
+    style = "minimal", border = opts.border, title = " Agent conversation ", title_pos = "center",
   })
   dashboard.input_win = vim.api.nvim_open_win(dashboard.input_buf, true, {
     relative = "editor", row = row + watch_height + 1, col = col, width = main_width, height = input_height,
-    style = "minimal", border = opts.border, title = " Prompt  <CR> send  @ files ", title_pos = "left",
+    style = "minimal", border = opts.border, title = " Prompt ", title_pos = "left",
+    footer = " <CR> send · @ files · Esc close ", footer_pos = "right",
   })
   dashboard.queue_win = vim.api.nvim_open_win(dashboard.queue_buf, false, {
     relative = "editor", row = row, col = col + main_width + 1, width = queue_width, height = total_height,
-    style = "minimal", border = opts.border, title = " Queue ", title_pos = "center",
+    style = "minimal", border = opts.border, title = " Agent queue ", title_pos = "center", focusable = false,
   })
-  vim.wo[dashboard.watch_win].winhl = "Normal:NormalFloat,FloatBorder:FloatBorder"
+  vim.wo[dashboard.watch_win].winhl = "Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:Title"
   vim.wo[dashboard.watch_win].scrolloff = 0
   vim.wo[dashboard.watch_win].wrap = true
   vim.wo[dashboard.watch_win].linebreak = true
   vim.wo[dashboard.watch_win].breakindent = true
   vim.wo[dashboard.watch_win].breakindentopt = "shift:2"
-  vim.wo[dashboard.input_win].winhl = "Normal:NormalFloat,FloatBorder:FloatBorder"
-  vim.wo[dashboard.queue_win].winhl = "Normal:NormalFloat,FloatBorder:FloatBorder"
+  vim.wo[dashboard.input_win].winhl = "Normal:NormalFloat,SignColumn:NormalFloat,FloatBorder:ConduitPromptBorder,FloatTitle:ConduitPromptBorder,FloatFooter:Comment"
+  vim.wo[dashboard.input_win].signcolumn = "yes:1"
+  vim.wo[dashboard.input_win].cursorline = true
+  vim.wo[dashboard.input_win].cursorlineopt = "screenline"
+  vim.wo[dashboard.input_win].linebreak = true
+  vim.wo[dashboard.input_win].breakindent = true
+  vim.wo[dashboard.queue_win].winhl = "Normal:NormalFloat,FloatBorder:ConduitMuted,FloatTitle:Title"
   vim.wo[dashboard.queue_win].wrap = true
+  vim.wo[dashboard.queue_win].linebreak = true
+  vim.wo[dashboard.queue_win].scrolloff = 0
   vim.wo[dashboard.input_win].wrap = true
   render_queue(dashboard)
   scroll_to_bottom(dashboard)
