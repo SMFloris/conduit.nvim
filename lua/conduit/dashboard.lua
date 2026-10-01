@@ -39,6 +39,18 @@ local function close_win(win)
   end
 end
 
+local function enable_markdown(buf)
+  vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(buf) then
+      return
+    end
+    local loaded, renderer = pcall(require, "render-markdown")
+    if loaded then
+      pcall(vim.api.nvim_buf_call, buf, renderer.buf_enable)
+    end
+  end)
+end
+
 local function scroll_to_bottom(dashboard)
   vim.schedule(function()
     if valid_win(dashboard.watch_win) and dashboard.watch_buf
@@ -132,7 +144,9 @@ local function render_transcript(dashboard)
     end
   end
   local function body(text, highlight, prefix)
-    prefix = prefix or "  "
+    -- Keep Markdown content below four columns of indentation so Treesitter
+    -- does not parse every response as an indented code block.
+    prefix = prefix or ""
     local body_lines = vim.split((text or ""):gsub("\r", ""), "\n", { plain = true })
     for _, value in ipairs(body_lines) do
       line(prefix .. value, highlight)
@@ -556,7 +570,10 @@ local function create_buffers(dashboard)
   vim.bo[dashboard.input_buf].bufhidden = "hide"
   vim.bo[dashboard.queue_buf].bufhidden = "hide"
   vim.bo[dashboard.input_buf].filetype = "conduit_ask"
-  vim.bo[dashboard.watch_buf].filetype = "conduit_session"
+  -- Agent messages are Markdown. Using the standard filetype lets
+  -- render-markdown.nvim attach without a custom parser or injection query.
+  vim.bo[dashboard.watch_buf].filetype = "markdown"
+  enable_markdown(dashboard.watch_buf)
   vim.bo[dashboard.watch_buf].modifiable = false
   vim.bo[dashboard.queue_buf].filetype = "conduit_queue"
   vim.bo[dashboard.queue_buf].modifiable = false

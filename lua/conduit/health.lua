@@ -70,6 +70,14 @@ function M.check()
     error("Neovim 0.10 or newer is required")
   end
 
+  if pcall(require, "render-markdown") then
+    ok("render-markdown.nvim is available")
+  else
+    warn("render-markdown.nvim is not available; dashboard replies will show raw Markdown", {
+      "Install MeanderingProgrammer/render-markdown.nvim and the markdown Treesitter parsers",
+    })
+  end
+
   local opts = require("conduit.config").opts
   if not opts.agent then
     error("No ACP agent is configured", { "Set `agent` in require('conduit').setup()" })

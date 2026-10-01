@@ -4,7 +4,7 @@ A Neovim client for ACP coding agents. Conduit provides a floating session dashb
 
 Based on [opencode.nvim](https://github.com/NickvanDyke/opencode.nvim) but with a tool-agnostic design.
 
-***Note:** This plugin works standalone but is greatly enhanced when used with [snacks.nvim](https://github.com/folke/snacks.nvim) and [blink.nvim](https://github.com/Saghen/blink.cmp) for an improved input experience.*
+***Note:** This plugin works standalone but is greatly enhanced by [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim) for rendered conversations, plus [snacks.nvim](https://github.com/folke/snacks.nvim) and [blink.nvim](https://github.com/Saghen/blink.cmp) for an improved input experience.*
 
 ## Demo
 
@@ -14,6 +14,7 @@ https://github.com/user-attachments/assets/bc8db443-3c52-4f6f-993c-06bbbdf114ac
 
 - **Lazy, persistent agents** - Uses `acpx` to retain one ACP session per project
 - **Session dashboard** - Live `acpx sessions watch` transcript, prompt input, and queue sidebar in one floating layout
+- **Rendered conversations** - Markdown replies, code blocks, lists, links, and tables are rendered in the dashboard
 - **Fuzzy file references** - Type `@` in the dashboard prompt to find project files and insert references
 - **ACP prompts** - Sends prompts directly instead of using the clipboard
 - **Interactive prompt input** with completions, syntax highlighting, and normal-mode support
@@ -44,6 +45,13 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 ```lua
 {
   "kitallen23/conduit.nvim",
+  dependencies = {
+    "nvim-treesitter/nvim-treesitter",
+    {
+      "MeanderingProgrammer/render-markdown.nvim",
+      opts = {},
+    },
+  },
   opts = {
     agent = {
       type = "local",
@@ -58,7 +66,12 @@ Using [packer.nvim](https://github.com/wbthomason/packer.nvim):
 ```lua
 use {
   "kitallen23/conduit.nvim",
+  requires = {
+    "nvim-treesitter/nvim-treesitter",
+    "MeanderingProgrammer/render-markdown.nvim",
+  },
   config = function()
+    require("render-markdown").setup({})
     require("conduit").setup({
       agent = {
         type = "local",
@@ -84,7 +97,7 @@ The default mappings are:
 | `<leader>ax` | Cancel the active ACP turn |
 | `<leader>aX` | Clear prompts waiting behind the active turn |
 
-Opening the dashboard ensures the project session exists and starts a persistent `acpx sessions watch` process. The top pane renders a themed live transcript with prompts, thinking, tool status, replies, and turn results while hiding ACP transport noise; it always stays at the newest line. The bottom pane submits prompts with `<CR>` or `<C-s>`, and the sidebar shows the active and queued prompts. Type `@` in the prompt pane to fuzzy-find a project file. Press `<C-n>` to create a fresh session, `<C-x>` to cancel the active turn, `<Esc>` or `<C-q>` to hide the dashboard, or `q` in normal mode; `<leader>aA` reopens the same watcher and buffers.
+Opening the dashboard ensures the project session exists and starts a persistent `acpx sessions watch` process. The top pane renders a themed live transcript with prompts, thinking, tool status, replies, and turn results while hiding ACP transport noise; it always stays at the newest line. When `render-markdown.nvim` and its `markdown` and `markdown_inline` Treesitter parsers are installed, Markdown replies are rendered directly in this pane. The bottom pane submits prompts with `<CR>` or `<C-s>`, and the sidebar shows the active and queued prompts. Type `@` in the prompt pane to fuzzy-find a project file. Press `<C-n>` to create a fresh session, `<C-x>` to cancel the active turn, `<Esc>` or `<C-q>` to hide the dashboard, or `q` in normal mode; `<leader>aA` reopens the same watcher and buffers.
 
 Place standalone directives such as `-- @ai: handle the empty result` or `// @ai: add validation` in a saved source file, then press `<leader>ac`. Conduit sends their line numbers and instructions with a reference to the file; the agent is told to implement every task and remove the completed directive comments.
 
