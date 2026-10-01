@@ -96,6 +96,34 @@ local function remember_session_files(instance, changed)
   instance.session_changed_files = files
 end
 
+local function session_update_files(instance, update)
+  local files = {}
+  local seen = {}
+  for _, item in ipairs(update.content or {}) do
+    if type(item) == "table" and item.type == "diff" and type(item.path) == "string" then
+      local path = item.path
+      if path:sub(1, 1) ~= "/" then
+        path = instance.cwd .. "/" .. path
+      end
+      path = vim.fs.normalize(path)
+      if require("conduit.project").contains(instance.cwd, path) and not seen[path] then
+        table.insert(files, path)
+        seen[path] = true
+      end
+    end
+  end
+  return files
+end
+
+local function watch_event_files(instance, event)
+  if event.type ~= "message" or type(event.message) ~= "table"
+      or event.message.method ~= "session/update" then
+    return {}
+  end
+  local update = event.message.params and event.message.params.update
+  return type(update) == "table" and session_update_files(instance, update) or {}
+end
+
 local function models_from_legacy(state)
   if not state or type(state.availableModels) ~= "table" then
     return {}, nil
@@ -419,6 +447,98 @@ local function acpx_json_command(instance, arguments, callback)
   if job <= 0 then
     callback(nil, "acpx is not executable")
   end
+end
+
+local function watch_cursor_sequence(cursor)
+  if type(cursor) ~= "string" then
+    return nil
+  end
+  local remainder = #cursor % 4
+  if remainder ~= 0 then
+    cursor = cursor .. string.rep("=", 4 - remainder)
+  end
+  local decoded_ok, decoded = pcall(vim.base64.decode, cursor)
+  if not decoded_ok then
+    return nil
+  end
+  local json_ok, value = pcall(vim.json.decode, decoded)
+  return json_ok and type(value) == "table" and tonumber(value[2]) or nil
+end
+
+local function scan_acpx_session_files(instance, last_seq, callback)
+  if not last_seq or last_seq < 1 then
+    callback({})
+    return
+  end
+
+  local partial = ""
+  local finished = false
+  local job
+  local timer = vim.uv.new_timer()
+  local function finish(err)
+    if finished then
+      return
+    end
+    finished = true
+    if timer then
+      timer:stop()
+      timer:close()
+      timer = nil
+    end
+    if job and job > 0 then
+      pcall(vim.fn.jobstop, job)
+    end
+    vim.schedule(function()
+      callback(vim.deepcopy(instance.session_changed_files or {}), err)
+    end)
+  end
+  local function consume(data)
+    local joined = partial .. table.concat(data or {}, "\n")
+    local lines = vim.split(joined, "\n", { plain = true })
+    if data and data[#data] == "" then
+      partial = ""
+      table.remove(lines)
+    else
+      partial = table.remove(lines) or ""
+    end
+    for _, line in ipairs(lines) do
+      if line ~= "" then
+        local ok, event = pcall(vim.json.decode, line)
+        if ok and type(event) == "table" then
+          remember_session_files(instance, watch_event_files(instance, event))
+          local sequence = watch_cursor_sequence(event.cursor)
+          if sequence and sequence >= last_seq then
+            finish()
+            return
+          end
+        end
+      end
+    end
+  end
+
+  job = vim.fn.jobstart(acpx_watch_command(instance), {
+    cwd = instance.cwd,
+    env = instance.adapter.env,
+    stdout_buffered = false,
+    stderr_buffered = true,
+    on_stdout = function(_, data)
+      consume(data)
+    end,
+    on_exit = function(_, code)
+      if not finished then
+        finish(code == 0 and nil or ("acpx session watcher exited with code " .. code))
+      end
+    end,
+  })
+  if job <= 0 then
+    finish("acpx is not executable")
+    return
+  end
+  timer:start(5000, 0, function()
+    vim.schedule(function()
+      finish("timed out while reading acpx session history")
+    end)
+  end)
 end
 
 local function acpx_config_options(instance, callback)
@@ -1125,6 +1245,59 @@ function M.new_session(callback)
           return
         end
         created(ready, session)
+      end)
+    end)
+  end)
+end
+
+---@param cwd string
+---@param update table
+function M.record_session_update(cwd, update)
+  local instance = instances[cwd]
+  if not instance then
+    return
+  end
+  local files = session_update_files(instance, update)
+  if #files == 0 then
+    return
+  end
+  remember_session_files(instance, files)
+  emit("ConduitSessionFilesChanged", {
+    cwd = cwd,
+    session_id = instance.session_id,
+    changed_files = files,
+  })
+end
+
+---@param callback fun(files: string[]|nil, err: string|nil)
+function M.session_files(callback)
+  local instance, err = get_instance()
+  if not instance then
+    callback(nil, err)
+    return
+  end
+  if instance.adapter.transport ~= "acpx" then
+    callback(vim.deepcopy(instance.session_changed_files or {}))
+    return
+  end
+  ensure_acpx(instance, function(ready, ensure_err)
+    if not ready then
+      callback(nil, ensure_err)
+      return
+    end
+    acpx_json_command(ready, { "sessions", "show" }, function(session, show_err)
+      if not session then
+        callback(nil, show_err)
+        return
+      end
+      ready.session_changed_files = {}
+      scan_acpx_session_files(ready, tonumber(session.lastSeq) or 0, function(files, scan_err)
+        emit("ConduitSessionFilesChanged", {
+          cwd = ready.cwd,
+          session_id = ready.session_id,
+          changed_files = files,
+        })
+        callback(files, scan_err)
       end)
     end)
   end)

@@ -218,14 +218,26 @@ function M.status()
   return require("conduit.agent").status()
 end
 
-function M.modified_files()
-  local status = require("conduit.agent").status()
-  local files = status.session_changed_files or {}
+function M.modified_files(files, root)
+  if files == nil then
+    local agent = require("conduit.agent")
+    agent.session_files(function(session_files, err)
+      vim.schedule(function()
+        if err then
+          vim.notify("Conduit: could not read complete agent session history: " .. err, vim.log.levels.WARN)
+        end
+        if session_files then
+          M.modified_files(session_files, agent.status().cwd)
+        end
+      end)
+    end)
+    return
+  end
   if #files == 0 then
     vim.notify("Conduit: the current agent session has not modified project files", vim.log.levels.INFO)
     return
   end
-  local root = status.cwd or require("conduit.project").root()
+  root = root or require("conduit.project").root()
   local git_available = false
   if vim.fn.executable("git") == 1 then
     local result = vim.system(

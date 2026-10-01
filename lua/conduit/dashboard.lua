@@ -245,6 +245,7 @@ local function mark_turn_meaningful(dashboard, request_id)
 end
 
 local function apply_session_update(dashboard, request_id, update)
+  require("conduit.agent").record_session_update(dashboard.cwd, update)
   local kind = update.sessionUpdate
   local message_id = update.messageId or "stream"
   if kind == "agent_message_chunk" or kind == "agent_thought_chunk" then
@@ -464,6 +465,7 @@ local function install_autocmds()
       "ConduitPromptQueued",
       "ConduitQueueCleared",
       "ConduitSessionCreated",
+      "ConduitSessionFilesChanged",
     },
     callback = function()
       vim.schedule(render_all)
