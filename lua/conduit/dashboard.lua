@@ -413,6 +413,7 @@ local function install_autocmds()
       "ConduitTurnComplete",
       "ConduitPromptQueued",
       "ConduitQueueCleared",
+      "ConduitSessionCreated",
     },
     callback = function()
       vim.schedule(render_all)
@@ -510,6 +511,12 @@ local function set_keymaps(dashboard)
   local function close()
     hide(dashboard)
   end
+  local function new_session()
+    require("conduit").new_session()
+  end
+  local function cancel()
+    require("conduit").cancel()
+  end
   vim.keymap.set("n", close_key, close, { buffer = dashboard.watch_buf, silent = true, desc = "Hide Conduit" })
   vim.keymap.set("n", normal_close_key, close, { buffer = dashboard.watch_buf, silent = true, desc = "Hide Conduit" })
   vim.keymap.set("n", "<Esc>", close, { buffer = dashboard.watch_buf, silent = true, desc = "Hide Conduit" })
@@ -517,6 +524,14 @@ local function set_keymaps(dashboard)
     vim.keymap.set({ "n", "i" }, close_key, close, { buffer = buf, silent = true, desc = "Hide Conduit" })
     vim.keymap.set("n", normal_close_key, close, { buffer = buf, silent = true, desc = "Hide Conduit" })
     vim.keymap.set({ "n", "i" }, "<Esc>", close, { buffer = buf, silent = true, desc = "Hide Conduit" })
+  end
+  for _, buf in ipairs({ dashboard.watch_buf, dashboard.input_buf, dashboard.queue_buf }) do
+    vim.keymap.set({ "n", "i" }, "<C-n>", new_session, {
+      buffer = buf, silent = true, desc = "Create new Conduit agent session",
+    })
+    vim.keymap.set({ "n", "i" }, "<C-x>", cancel, {
+      buffer = buf, silent = true, desc = "Cancel active Conduit agent turn",
+    })
   end
   vim.keymap.set({ "n", "i" }, "<CR>", function()
     submit(dashboard)
@@ -560,15 +575,22 @@ local function start_watcher(dashboard, command, env)
   if dashboard.watch_job and vim.fn.jobwait({ dashboard.watch_job }, 0)[1] == -1 then
     return
   end
+  dashboard.watch_generation = (dashboard.watch_generation or 0) + 1
+  local generation = dashboard.watch_generation
   dashboard.watch_job = vim.fn.jobstart(command, {
     cwd = dashboard.cwd,
     env = env,
     stdout_buffered = false,
     stderr_buffered = false,
     on_stdout = function(_, data)
-      consume_watch_data(dashboard, data)
+      if dashboard.watch_generation == generation then
+        consume_watch_data(dashboard, data)
+      end
     end,
     on_stderr = function(_, data)
+      if dashboard.watch_generation ~= generation then
+        return
+      end
       local message = table.concat(data or {}, "\n"):gsub("^%s+", ""):gsub("%s+$", "")
       local err = meaningful_error(message)
       if err then
@@ -577,6 +599,9 @@ local function start_watcher(dashboard, command, env)
       end
     end,
     on_exit = function(_, code)
+      if dashboard.watch_generation ~= generation then
+        return
+      end
       dashboard.watch_job = nil
       if code ~= 0 then
         add_item(dashboard, { kind = "notice", text = "Session watcher stopped (exit " .. code .. ")" })
@@ -610,8 +635,8 @@ local function open_windows(dashboard)
   })
   dashboard.input_win = vim.api.nvim_open_win(dashboard.input_buf, true, {
     relative = "editor", row = row + watch_height + 1, col = col, width = main_width, height = input_height,
-    style = "minimal", border = opts.border, title = " Prompt ", title_pos = "left",
-    footer = " <CR> send · @ files · Esc close ", footer_pos = "right",
+    style = "minimal", border = opts.border, title = " Prompt · @ files ", title_pos = "left",
+    footer = " <CR> send · C-n new · C-x cancel ", footer_pos = "right",
   })
   dashboard.queue_win = vim.api.nvim_open_win(dashboard.queue_buf, false, {
     relative = "editor", row = row, col = col + main_width + 1, width = queue_width, height = total_height,
@@ -656,8 +681,30 @@ function M.open(cwd, command, env)
     dashboards[cwd] = dashboard
     create_buffers(dashboard)
   end
+  dashboard.watch_command = vim.deepcopy(command)
+  dashboard.watch_env = env and vim.deepcopy(env) or nil
   start_watcher(dashboard, command, env)
   open_windows(dashboard)
+end
+
+---@param cwd string
+function M.restart(cwd)
+  local dashboard = dashboards[cwd]
+  if not dashboard or not dashboard.watch_command then
+    return
+  end
+  dashboard.watch_generation = (dashboard.watch_generation or 0) + 1
+  if dashboard.watch_job then
+    pcall(vim.fn.jobstop, dashboard.watch_job)
+    dashboard.watch_job = nil
+  end
+  dashboard.watch_partial = ""
+  dashboard.transcript_items = {}
+  dashboard.transcript_blocks = {}
+  dashboard.turns = {}
+  render_transcript(dashboard)
+  render_queue(dashboard)
+  start_watcher(dashboard, dashboard.watch_command, dashboard.watch_env)
 end
 
 ---@param cwd string
@@ -676,6 +723,7 @@ end
 
 function M.stop_all()
   for _, dashboard in pairs(dashboards) do
+    dashboard.watch_generation = (dashboard.watch_generation or 0) + 1
     if dashboard.watch_job then
       pcall(vim.fn.jobstop, dashboard.watch_job)
     end

@@ -82,7 +82,7 @@ The default mappings are:
 | `<leader>ax` | Cancel the active ACP turn |
 | `<leader>aX` | Clear prompts waiting behind the active turn |
 
-Opening the dashboard ensures the project session exists and starts a persistent `acpx sessions watch` process. The top pane renders a themed live transcript with prompts, thinking, tool status, replies, and turn results while hiding ACP transport noise; it always stays at the newest line. The bottom pane submits prompts with `<CR>` or `<C-s>`, and the sidebar shows the active and queued prompts. Type `@` in the prompt pane to fuzzy-find a project file. Press `<Esc>` or `<C-q>` from any pane, or `q` in normal mode, to hide the dashboard; `<leader>aA` reopens the same watcher and buffers.
+Opening the dashboard ensures the project session exists and starts a persistent `acpx sessions watch` process. The top pane renders a themed live transcript with prompts, thinking, tool status, replies, and turn results while hiding ACP transport noise; it always stays at the newest line. The bottom pane submits prompts with `<CR>` or `<C-s>`, and the sidebar shows the active and queued prompts. Type `@` in the prompt pane to fuzzy-find a project file. Press `<C-n>` to create a fresh session, `<C-x>` to cancel the active turn, `<Esc>` or `<C-q>` to hide the dashboard, or `q` in normal mode; `<leader>aA` reopens the same watcher and buffers.
 
 You can also call the functions directly:
 
@@ -178,6 +178,7 @@ If no agent is configured, `ask` retains the original behavior and copies the ex
 | `open_agent` | Open or focus the ACP session dashboard |
 | `cancel` | Cancel the active ACP turn |
 | `clear_queue` | Remove pending prompts and return how many were removed |
+| `new_session` | Create a fresh agent session for the current project |
 | `status` | Return the current project agent's state and session ID |
 | `modified_files` | Pick and open a file modified by the latest completed agent turn |
 | `select_model` | Pick from models advertised by the configured agent |
@@ -234,6 +235,7 @@ Conduit emits `User` autocmds with details in `event.data`:
 | `ConduitQueueCleared` | Waiting client or agent-owned prompt requests were cancelled |
 | `ConduitModelChanged` | The persistent session accepted a new model selection |
 | `ConduitThinkingLevelChanged` | The persistent session accepted a new thinking level |
+| `ConduitSessionCreated` | A fresh project agent session was created |
 | `ConduitTurnStarted` | A prompt turn started |
 | `ConduitTurnComplete` | Refresh finished; includes changed and skipped files |
 | `ConduitAgentExited` | The ACP process exited or initialization failed |

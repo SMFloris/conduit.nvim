@@ -155,6 +155,14 @@ function M.clear_queue()
   return require("conduit.agent").clear_queue()
 end
 
+function M.new_session()
+  require("conduit.agent").new_session(function(instance)
+    if instance then
+      require("conduit.dashboard").restart(instance.cwd)
+    end
+  end)
+end
+
 function M.status()
   return require("conduit.agent").status()
 end

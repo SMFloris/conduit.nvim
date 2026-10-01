@@ -1028,6 +1028,68 @@ function M.set_thinking_level(level_id, callback)
   end)
 end
 
+---@param callback? fun(instance: table|nil, err: string|nil)
+function M.new_session(callback)
+  callback = callback or function() end
+  local instance, err = get_instance()
+  if not instance then
+    notify("Conduit: " .. err, vim.log.levels.ERROR)
+    callback(nil, err)
+    return
+  end
+  if instance.state == "busy" or instance.state == "starting" or instance.refreshing or instance.finishing
+      or #instance.queue > 0 or #instance.native_queue > 0 then
+    local message = "wait for the active turn and queue before creating a new session"
+    notify("Conduit: " .. message, vim.log.levels.WARN)
+    callback(nil, message)
+    return
+  end
+  local function created(ready, session)
+    ready.session_id = session.sessionId or session.acpxSessionId or session.agentSessionId
+    ready.config_options = session.configOptions or {}
+    ready.legacy_models = session.models
+    ready.model = nil
+    ready.thinking_level = nil
+    ready.last_changed_files = {}
+    ready.state = "ready"
+    ready.acpx_ensured = ready.adapter.transport == "acpx" or nil
+    emit("ConduitSessionCreated", { cwd = ready.cwd, session_id = ready.session_id })
+    notify("Conduit: created a new agent session")
+    callback(ready)
+  end
+  if instance.adapter.transport == "acpx" then
+    instance.state = "starting"
+    acpx_json_command(instance, { "sessions", "new" }, function(result, command_err)
+      if not result then
+        instance.state = instance.acpx_ensured and "ready" or "stopped"
+        notify("Conduit: could not create session: " .. command_err, vim.log.levels.ERROR)
+        callback(nil, command_err)
+        return
+      end
+      created(instance, result)
+    end)
+    return
+  end
+  ensure(function(ready, ensure_err)
+    if not ready then
+      notify("Conduit: " .. ensure_err, vim.log.levels.ERROR)
+      callback(nil, ensure_err)
+      return
+    end
+    ready.rpc:request("session/new", { cwd = ready.cwd, mcpServers = {} }, function(session, session_err)
+      vim.schedule(function()
+        if session_err or not session or not session.sessionId then
+          local message = session_err and error_message(session_err) or "agent returned a session without an ID"
+          notify("Conduit: could not create session: " .. message, vim.log.levels.ERROR)
+          callback(nil, message)
+          return
+        end
+        created(ready, session)
+      end)
+    end)
+  end)
+end
+
 function M.stop_all()
   for _, instance in pairs(instances) do
     if instance.rpc then
