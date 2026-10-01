@@ -136,12 +136,18 @@ local function render_transcript(dashboard)
   end
   local lines, highlights = { "" }, {}
   local function line(text, highlight)
-    if text ~= "" then
-      text = "  " .. text
+    local values = vim.split(tostring(text or ""):gsub("\r", ""), "\n", { plain = true })
+    if #values == 0 then
+      values = { "" }
     end
-    table.insert(lines, text)
-    if highlight then
-      table.insert(highlights, { #lines - 1, highlight })
+    for _, value in ipairs(values) do
+      if value ~= "" then
+        value = "  " .. value
+      end
+      table.insert(lines, value)
+      if highlight then
+        table.insert(highlights, { #lines - 1, highlight })
+      end
     end
   end
   local function body(text, highlight, prefix)
