@@ -248,18 +248,22 @@ function M.modified_files()
   if snacks_ok and snacks.picker and snacks.picker.pick then
     local items = {}
     for index, path in ipairs(files) do
-      local relative = path
+      local absolute = vim.fs.normalize(path)
+      local relative = absolute
       local prefix = vim.fs.normalize(root) .. "/"
-      if path:sub(1, #prefix) == prefix then
-        relative = path:sub(#prefix + 1)
+      if absolute:sub(1, #prefix) == prefix then
+        relative = absolute:sub(#prefix + 1)
       end
       table.insert(items, {
         idx = index,
         text = relative,
-        file = path,
+        -- Snacks resolves `file` against `cwd`, so it must stay relative.
+        -- Keep the absolute path separately for filesystem checks and opening.
+        file = relative,
+        absolute_path = absolute,
         git_path = relative,
         cwd = root,
-        deleted = not vim.uv.fs_stat(path),
+        deleted = not vim.uv.fs_stat(absolute),
       })
     end
     snacks.picker.pick({
@@ -299,7 +303,7 @@ function M.modified_files()
       confirm = function(picker, item)
         picker:close()
         vim.schedule(function()
-          open(item and item.file)
+          open(item and item.absolute_path)
         end)
       end,
     })
