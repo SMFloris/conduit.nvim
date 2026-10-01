@@ -78,7 +78,7 @@ The default mappings are:
 | `<leader>aA` | Open or focus the ACP session dashboard |
 | `<leader>ap` | Select a prompt from the prompt library |
 | `<leader>ah` | Pick from files modified by the latest agent turn |
-| `<leader>am` | Select the persistent agent session's model |
+| `<leader>am` | Select the persistent session's model and thinking level |
 | `<leader>ax` | Cancel the active ACP turn |
 | `<leader>aX` | Clear prompts waiting behind the active turn |
 
@@ -181,6 +181,7 @@ If no agent is configured, `ask` retains the original behavior and copies the ex
 | `status` | Return the current project agent's state and session ID |
 | `modified_files` | Pick and open a file modified by the latest completed agent turn |
 | `select_model` | Pick from models advertised by the configured agent |
+| `select_thinking_level` | Pick from thinking levels supported by the selected model |
 | `prompt` | Legacy helper that expands a prompt and copies it to the clipboard |
 | `select_prompt` | Open the prompt picker, or submit a prompt by key |
 
@@ -232,6 +233,7 @@ Conduit emits `User` autocmds with details in `event.data`:
 | `ConduitPromptQueued` | A prompt was queued behind an active turn; includes `queue_owner` |
 | `ConduitQueueCleared` | Waiting client or agent-owned prompt requests were cancelled |
 | `ConduitModelChanged` | The persistent session accepted a new model selection |
+| `ConduitThinkingLevelChanged` | The persistent session accepted a new thinking level |
 | `ConduitTurnStarted` | A prompt turn started |
 | `ConduitTurnComplete` | Refresh finished; includes changed and skipped files |
 | `ConduitAgentExited` | The ACP process exited or initialization failed |

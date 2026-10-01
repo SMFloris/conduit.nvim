@@ -39,7 +39,7 @@ local function model_config_option(config_options)
   return selected
 end
 
-local function models_from_option(option)
+local function values_from_option(option)
   if not option then
     return {}, nil
   end
@@ -61,6 +61,15 @@ local function models_from_option(option)
     end
   end
   return models, option.currentValue
+end
+
+local function thinking_config_option(config_options)
+  for _, option in ipairs(config_options or {}) do
+    if option.type == "select"
+        and (option.category == "thought_level" or option.id == "reasoning_effort" or option.id == "thought_level") then
+      return option
+    end
+  end
 end
 
 local function models_from_legacy(state)
@@ -367,6 +376,22 @@ local function acpx_json_command(instance, arguments, callback)
   if job <= 0 then
     callback(nil, "acpx is not executable")
   end
+end
+
+local function acpx_config_options(instance, callback)
+  acpx_json_command(instance, { "sessions", "show" }, function(result, err)
+    if not result then
+      callback(nil, err)
+      return
+    end
+    local options = result.acpx and result.acpx.config_options
+    if type(options) ~= "table" then
+      callback(nil, "agent session did not advertise configuration options", result)
+      return
+    end
+    instance.config_options = options
+    callback(options, nil, result)
+  end)
 end
 
 local function finish_acpx_ensure(instance, err)
@@ -762,17 +787,25 @@ function M.models(callback)
         callback(nil, nil, ensure_err)
         return
       end
-      acpx_json_command(ready, { "status" }, function(result, command_err)
-        if not result then
-          callback(nil, nil, command_err)
+      acpx_config_options(ready, function(options, command_err, session)
+        if not options then
+          local acpx = session and session.acpx or {}
+          local models = {}
+          for _, id in ipairs(acpx.available_models or {}) do
+            local names = acpx.available_model_names or {}
+            table.insert(models, { id = id, name = names[id] or id })
+          end
+          if #models == 0 then
+            callback(nil, nil, command_err)
+            return
+          end
+          ready.model = acpx.current_model_id
+          callback(models, acpx.current_model_id)
           return
         end
-        local models = {}
-        for _, id in ipairs(result.availableModels or {}) do
-          table.insert(models, { id = id, name = id })
-        end
-        ready.model = result.model
-        callback(models, result.model)
+        local models, current = values_from_option(model_config_option(options))
+        ready.model = current
+        callback(models, current)
       end)
     end)
     return
@@ -783,12 +816,49 @@ function M.models(callback)
       return
     end
     local option = model_config_option(ready.config_options)
-    local models, current = models_from_option(option)
+    local models, current = values_from_option(option)
     if not option then
       models, current = models_from_legacy(ready.legacy_models)
     end
     ready.model = current
     callback(models, current)
+  end)
+end
+
+---@param callback fun(levels: table[]|nil, current: string|nil, err: string|nil)
+function M.thinking_levels(callback)
+  local instance, err = get_instance()
+  if not instance then
+    callback(nil, nil, err)
+    return
+  end
+  local function respond(ready, options)
+    local levels, current = values_from_option(thinking_config_option(options))
+    ready.thinking_level = current
+    callback(levels, current)
+  end
+  if instance.adapter.transport == "acpx" then
+    ensure_acpx(instance, function(ready, ensure_err)
+      if not ready then
+        callback(nil, nil, ensure_err)
+        return
+      end
+      acpx_config_options(ready, function(options, command_err)
+        if not options then
+          callback(nil, nil, command_err)
+          return
+        end
+        respond(ready, options)
+      end)
+    end)
+    return
+  end
+  ensure(function(ready, ensure_err)
+    if not ready then
+      callback(nil, nil, ensure_err)
+      return
+    end
+    respond(ready, ready.config_options)
   end)
 end
 
@@ -873,6 +943,91 @@ function M.set_model(model_id, callback)
   end)
 end
 
+---@param level_id string
+---@param callback? fun(ok: boolean, err: string|nil)
+function M.set_thinking_level(level_id, callback)
+  callback = callback or function() end
+  local instance, err = get_instance()
+  if not instance then
+    notify("Conduit: " .. err, vim.log.levels.ERROR)
+    callback(false, err)
+    return
+  end
+  local function changed(ready, option, result)
+    ready.thinking_level = level_id
+    if result and result.configOptions then
+      ready.config_options = result.configOptions
+    else
+      option.currentValue = level_id
+    end
+    emit("ConduitThinkingLevelChanged", {
+      cwd = ready.cwd,
+      session_id = ready.session_id,
+      thinking_level = level_id,
+    })
+    notify("Conduit: thinking level set to " .. level_id)
+    callback(true)
+  end
+  local function set_direct(ready, option)
+    if not option then
+      local message = "this agent did not advertise thinking-level selection"
+      notify("Conduit: " .. message, vim.log.levels.WARN)
+      callback(false, message)
+      return
+    end
+    ready.rpc:request("session/set_config_option", {
+      sessionId = ready.session_id,
+      configId = option.id,
+      value = level_id,
+    }, function(result, set_err)
+      vim.schedule(function()
+        if set_err then
+          local message = error_message(set_err)
+          notify("Conduit: could not set thinking level: " .. message, vim.log.levels.ERROR)
+          callback(false, message)
+          return
+        end
+        changed(ready, option, result)
+      end)
+    end)
+  end
+  if instance.adapter.transport == "acpx" then
+    ensure_acpx(instance, function(ready, ensure_err)
+      if not ready then
+        notify("Conduit: " .. ensure_err, vim.log.levels.ERROR)
+        callback(false, ensure_err)
+        return
+      end
+      acpx_config_options(ready, function(options, options_err)
+        local option = options and thinking_config_option(options)
+        if not option then
+          local message = options_err or "this agent did not advertise thinking-level selection"
+          notify("Conduit: " .. message, vim.log.levels.WARN)
+          callback(false, message)
+          return
+        end
+        acpx_json_command(ready, { "set", option.id, level_id }, function(result, command_err)
+          if not result then
+            notify("Conduit: could not set thinking level: " .. command_err, vim.log.levels.ERROR)
+            callback(false, command_err)
+            return
+          end
+          changed(ready, option, result)
+        end)
+      end)
+    end)
+    return
+  end
+  ensure(function(ready, ensure_err)
+    if not ready then
+      notify("Conduit: " .. ensure_err, vim.log.levels.ERROR)
+      callback(false, ensure_err)
+      return
+    end
+    set_direct(ready, thinking_config_option(ready.config_options))
+  end)
+end
+
 function M.stop_all()
   for _, instance in pairs(instances) do
     if instance.rpc then
@@ -903,6 +1058,7 @@ function M.status()
     queued_prompts = vim.deepcopy(instance.queue),
     current_prompt = instance.current_prompt,
     model = instance.model,
+    thinking_level = instance.thinking_level,
     last_changed_files = vim.deepcopy(instance.last_changed_files or {}),
     busy = instance.state == "busy" or instance.refreshing or false,
     steering_supported = instance.steering_supported or false,

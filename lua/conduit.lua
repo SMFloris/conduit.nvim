@@ -27,7 +27,7 @@ local function set_keymaps()
     vim.keymap.set("n", keymaps.modified_files, M.modified_files, { desc = "Latest files modified by Conduit agent" })
   end
   if keymaps.models then
-    vim.keymap.set("n", keymaps.models, M.select_model, { desc = "Select Conduit agent model" })
+    vim.keymap.set("n", keymaps.models, M.select_model, { desc = "Select Conduit model and thinking level" })
   end
   if keymaps.cancel then
     vim.keymap.set("n", keymaps.cancel, M.cancel, { desc = "Cancel Conduit agent turn" })
@@ -210,10 +210,42 @@ function M.select_model()
         return marker .. label
       end,
     }, function(model)
-      if not model or model.id == current then
+      if not model then
         return
       end
-      require("conduit.agent").set_model(model.id)
+      if model.id == current then
+        M.select_thinking_level()
+        return
+      end
+      require("conduit.agent").set_model(model.id, function(ok)
+        if ok then
+          M.select_thinking_level()
+        end
+      end)
+    end)
+  end)
+end
+
+function M.select_thinking_level()
+  require("conduit.agent").thinking_levels(function(levels, current, err)
+    if err then
+      vim.notify("Conduit: " .. err, vim.log.levels.ERROR)
+      return
+    end
+    if not levels or #levels == 0 then
+      vim.notify("Conduit: this agent did not advertise thinking levels", vim.log.levels.WARN)
+      return
+    end
+    vim.ui.select(levels, {
+      prompt = "Conduit thinking level: ",
+      format_item = function(level)
+        local marker = level.id == current and "● " or "  "
+        return marker .. (level.name or level.id)
+      end,
+    }, function(level)
+      if level and level.id ~= current then
+        require("conduit.agent").set_thinking_level(level.id)
+      end
     end)
   end)
 end
