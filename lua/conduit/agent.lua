@@ -9,8 +9,14 @@ local function emit(pattern, data)
   })
 end
 
-local function notify(message, level)
+local function notify(message, level, opts)
   if require("conduit.config").opts.notify then
+    if opts and opts.background and opts.cwd then
+      local dashboard_ok, dashboard = pcall(require, "conduit.dashboard")
+      if dashboard_ok and dashboard.is_visible(opts.cwd) then
+        return
+      end
+    end
     vim.notify(message, level or vim.log.levels.INFO)
   end
 end
@@ -72,6 +78,24 @@ local function thinking_config_option(config_options)
   end
 end
 
+local function remember_session_files(instance, changed)
+  local files = {}
+  local seen = {}
+  for _, path in ipairs(changed or {}) do
+    if not seen[path] then
+      table.insert(files, path)
+      seen[path] = true
+    end
+  end
+  for _, path in ipairs(instance.session_changed_files or {}) do
+    if not seen[path] then
+      table.insert(files, path)
+      seen[path] = true
+    end
+  end
+  instance.session_changed_files = files
+end
+
 local function models_from_legacy(state)
   if not state or type(state.availableModels) ~= "table" then
     return {}, nil
@@ -104,9 +128,13 @@ local function fail(instance, message)
   emit("ConduitAgentExited", { cwd = instance.cwd, error = message })
 end
 
-local function permission_request(params, respond)
+local function permission_request(instance, params, respond)
   local options = params.options or {}
   local title = params.toolCall and params.toolCall.title or "Agent permission request"
+  notify("Conduit: agent needs permission", vim.log.levels.WARN, {
+    background = true,
+    cwd = instance.cwd,
+  })
   vim.ui.select(options, {
     prompt = title .. ": ",
     format_item = function(option)
@@ -121,9 +149,9 @@ local function permission_request(params, respond)
   end)
 end
 
-local function on_request(method, params, respond)
+local function on_request(instance, method, params, respond)
   if method == "session/request_permission" then
-    permission_request(params, respond)
+    permission_request(instance, params, respond)
     return
   end
   respond(nil, { code = -32601, message = "Conduit does not implement " .. method })
@@ -181,7 +209,9 @@ local function start(instance)
     cmd = instance.adapter.acp_command,
     cwd = instance.cwd,
     env = instance.adapter.env,
-    on_request = on_request,
+    on_request = function(method, params, respond)
+      on_request(instance, method, params, respond)
+    end,
     on_notification = function(method, params)
       if method == "session/update" then
         instance.last_update = params.update
@@ -274,13 +304,20 @@ local function refresh(instance, stop_reason, before, turn_error, on_complete)
   vim.schedule(function()
     local ok, changed, skipped = pcall(require("conduit.refresh").run, instance.cwd, before)
     if not ok then
-      notify("Conduit refresh failed: " .. tostring(changed), vim.log.levels.ERROR)
+      notify("Conduit refresh failed: " .. tostring(changed), vim.log.levels.ERROR, {
+        background = true,
+        cwd = instance.cwd,
+      })
       changed, skipped = {}, {}
     end
     if #skipped > 0 then
-      notify("Conduit: kept " .. #skipped .. " modified buffer(s) unchanged", vim.log.levels.WARN)
+      notify("Conduit: kept " .. #skipped .. " modified buffer(s) unchanged", vim.log.levels.WARN, {
+        background = true,
+        cwd = instance.cwd,
+      })
     end
     instance.last_changed_files = vim.deepcopy(changed)
+    remember_session_files(instance, changed)
     instance.refreshing = false
     instance.finishing = true
     emit("ConduitTurnComplete", {
@@ -292,9 +329,15 @@ local function refresh(instance, stop_reason, before, turn_error, on_complete)
       error = turn_error,
     })
     if turn_error then
-      notify("Conduit prompt failed: " .. turn_error, vim.log.levels.ERROR)
+      notify("Conduit prompt failed: " .. turn_error, vim.log.levels.ERROR, {
+        background = true,
+        cwd = instance.cwd,
+      })
     else
-      notify("Conduit: agent finished (" .. stop_reason .. ")")
+      notify("Conduit: agent finished (" .. stop_reason .. ")", nil, {
+        background = true,
+        cwd = instance.cwd,
+      })
     end
     instance.finishing = false
     if on_complete then
@@ -542,7 +585,6 @@ turn_started = function(instance, queue_length)
     queue_length = queue_length,
     queue_owner = instance.adapter.transport == "acpx" and "acpx" or instance.adapter.queue_mode,
   })
-  notify("Conduit: agent is working")
 end
 
 local function send_prompt(instance, prompt)
@@ -634,7 +676,6 @@ local function submit_native(instance, prompt)
 
   if queued then
     local count = #instance.native_queue
-    notify("Conduit: prompt queued by agent (" .. count .. " waiting)")
     emit("ConduitPromptQueued", {
       cwd = instance.cwd,
       session_id = instance.session_id,
@@ -660,7 +701,6 @@ function M.submit(prompt)
     if acpx_instance.state == "starting" or acpx_instance.state == "busy" or acpx_instance.refreshing
         or acpx_instance.finishing or #acpx_instance.queue > 1 then
       local count = #acpx_instance.queue
-      notify("Conduit: prompt queued (" .. count .. " waiting)")
       emit("ConduitPromptQueued", {
         cwd = acpx_instance.cwd,
         session_id = acpx_instance.session_id,
@@ -686,7 +726,6 @@ function M.submit(prompt)
     table.insert(instance.queue, prompt)
     if instance.state == "busy" or instance.refreshing or instance.finishing then
       local count = #instance.queue
-      notify("Conduit: prompt queued (" .. count .. " waiting)")
       emit("ConduitPromptQueued", {
         cwd = instance.cwd,
         session_id = instance.session_id,
@@ -1051,6 +1090,7 @@ function M.new_session(callback)
     ready.model = nil
     ready.thinking_level = nil
     ready.last_changed_files = {}
+    ready.session_changed_files = {}
     ready.state = "ready"
     ready.acpx_ensured = ready.adapter.transport == "acpx" or nil
     emit("ConduitSessionCreated", { cwd = ready.cwd, session_id = ready.session_id })
@@ -1122,6 +1162,7 @@ function M.status()
     model = instance.model,
     thinking_level = instance.thinking_level,
     last_changed_files = vim.deepcopy(instance.last_changed_files or {}),
+    session_changed_files = vim.deepcopy(instance.session_changed_files or {}),
     busy = instance.state == "busy" or instance.refreshing or false,
     steering_supported = instance.steering_supported or false,
     transport = instance.adapter.transport or "direct",

@@ -12,10 +12,15 @@ local function set_keymaps()
     return
   end
   if keymaps.ask then
-    vim.keymap.set("n", keymaps.ask, M.ask, { desc = "Prompt Conduit agent" })
+    vim.keymap.set("n", keymaps.ask, function()
+      M.ask("@cursor: ")
+    end, { desc = "Prompt Conduit agent at cursor" })
     vim.keymap.set("v", keymaps.ask, function()
       M.ask("@selection: ")
     end, { desc = "Prompt Conduit agent about selection" })
+  end
+  if keymaps.ai_comments then
+    vim.keymap.set("n", keymaps.ai_comments, M.resolve_ai_comments, { desc = "Resolve @ai comments with Conduit" })
   end
   if keymaps.toggle then
     vim.keymap.set("n", keymaps.toggle, M.open_agent, { desc = "Open Conduit agent" })
@@ -24,7 +29,7 @@ local function set_keymaps()
     vim.keymap.set({ "n", "v" }, keymaps.prompts, M.select_prompt, { desc = "Select Conduit prompt" })
   end
   if keymaps.modified_files then
-    vim.keymap.set("n", keymaps.modified_files, M.modified_files, { desc = "Latest files modified by Conduit agent" })
+    vim.keymap.set("n", keymaps.modified_files, M.modified_files, { desc = "Files modified in Conduit session" })
   end
   if keymaps.models then
     vim.keymap.set("n", keymaps.models, M.select_model, { desc = "Select Conduit model and thinking level" })
@@ -42,6 +47,11 @@ function M.setup(opts)
   require("conduit.config").setup(opts)
   configured = false
   set_keymaps()
+  if vim.fn.exists(":ConduitHealth") == 0 then
+    vim.api.nvim_create_user_command("ConduitHealth", function()
+      vim.cmd("checkhealth conduit")
+    end, { desc = "Check Conduit agent configuration and runtime" })
+  end
   local group = vim.api.nvim_create_augroup("ConduitLifecycle", { clear = true })
   vim.api.nvim_create_autocmd("VimLeavePre", {
     group = group,
@@ -155,6 +165,47 @@ function M.clear_queue()
   return require("conduit.agent").clear_queue()
 end
 
+---Submit every `@ai:` comment in the current file as an agent task.
+function M.resolve_ai_comments()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local path = vim.api.nvim_buf_get_name(bufnr)
+  if path == "" or vim.bo[bufnr].buftype ~= "" then
+    vim.notify("Conduit: @ai comments require a named file buffer", vim.log.levels.WARN)
+    return
+  end
+
+  local directives = require("conduit.ai_comments").scan(bufnr)
+  if #directives == 0 then
+    vim.notify("Conduit: no @ai: comments found in this buffer", vim.log.levels.INFO)
+    return
+  end
+  if vim.bo[bufnr].modified or not vim.uv.fs_stat(path) then
+    vim.notify("Conduit: save the buffer before resolving @ai comments", vim.log.levels.WARN)
+    return
+  end
+
+  local root = require("conduit.project").root()
+  path = vim.fs.normalize(path)
+  local prefix = vim.fs.normalize(root) .. "/"
+  local target = path:sub(1, #prefix) == prefix and path:sub(#prefix + 1) or path
+  target = (require("conduit.config").opts.file_prefix or "") .. target
+
+  local tasks = {}
+  for _, item in ipairs(directives) do
+    table.insert(tasks, string.format("- line %d: %s", item.line, item.text ~= "" and item.text or "(no description)"))
+  end
+
+  M.submit(table.concat({
+    "Resolve every @ai: directive in " .. target .. ".",
+    "Treat each directive as a coding task. Implement the requested changes in the file or project, "
+      .. "then remove the entire comment containing that directive. Do not leave any @ai: markers behind. "
+      .. "Preserve unrelated behavior.",
+    "",
+    "Directives:",
+    table.concat(tasks, "\n"),
+  }, "\n"))
+end
+
 function M.new_session()
   require("conduit.agent").new_session(function(instance)
     if instance then
@@ -169,14 +220,14 @@ end
 
 function M.modified_files()
   local status = require("conduit.agent").status()
-  local files = status.last_changed_files or {}
+  local files = status.session_changed_files or {}
   if #files == 0 then
-    vim.notify("Conduit: the latest agent turn did not modify project files", vim.log.levels.INFO)
+    vim.notify("Conduit: the current agent session has not modified project files", vim.log.levels.INFO)
     return
   end
   local root = status.cwd or require("conduit.project").root()
   vim.ui.select(files, {
-    prompt = "Latest agent-modified files: ",
+    prompt = "Files modified in this agent session: ",
     format_item = function(path)
       local relative = path
       local prefix = vim.fs.normalize(root) .. "/"

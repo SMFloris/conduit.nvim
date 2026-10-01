@@ -27,6 +27,7 @@ https://github.com/user-attachments/assets/bc8db443-3c52-4f6f-993c-06bbbdf114ac
 - **Project-aware sessions** - Detects LSP or marker roots and isolates agents and history by project
 - **Prompt history** - Use Up/Down in the enhanced prompt window to revisit project prompts
 - **Observable lifecycle** - User autocmds expose agent, queue, and turn state
+- **Built-in health checks** - Diagnose executables, project roots, authentication, sessions, and watchers
 - **Reliable queueing** - Keeps prompt order locally while `acpx` coordinates cross-process session ownership
 - **Sensible defaults** with granular configuration options
 
@@ -74,15 +75,20 @@ The default mappings are:
 
 | Mapping | Action |
 | - | - |
-| `<leader>aa` | Enter a prompt and submit it over ACP |
+| `<leader>aa` | Enter a prompt about `@cursor` and submit it over ACP |
+| `<leader>ac` | Resolve all `@ai:` comments in the current file and remove them |
 | `<leader>aA` | Open or focus the ACP session dashboard |
 | `<leader>ap` | Select a prompt from the prompt library |
-| `<leader>ah` | Pick from files modified by the latest agent turn |
+| `<leader>ah` | Pick from files modified during the current agent session |
 | `<leader>am` | Select the persistent session's model and thinking level |
 | `<leader>ax` | Cancel the active ACP turn |
 | `<leader>aX` | Clear prompts waiting behind the active turn |
 
 Opening the dashboard ensures the project session exists and starts a persistent `acpx sessions watch` process. The top pane renders a themed live transcript with prompts, thinking, tool status, replies, and turn results while hiding ACP transport noise; it always stays at the newest line. The bottom pane submits prompts with `<CR>` or `<C-s>`, and the sidebar shows the active and queued prompts. Type `@` in the prompt pane to fuzzy-find a project file. Press `<C-n>` to create a fresh session, `<C-x>` to cancel the active turn, `<Esc>` or `<C-q>` to hide the dashboard, or `q` in normal mode; `<leader>aA` reopens the same watcher and buffers.
+
+Place standalone directives such as `-- @ai: handle the empty result` or `// @ai: add validation` in a saved source file, then press `<leader>ac`. Conduit sends their line numbers and instructions with a reference to the file; the agent is told to implement every task and remove the completed directive comments.
+
+Run `:checkhealth conduit` or `:ConduitHealth` to verify the project root, configured executables, ACP connection and authentication, active session, and dashboard watcher. Routine lifecycle notifications are suppressed while the dashboard is visible; when it is hidden, Conduit notifies you when a background turn finishes, fails, or needs permission.
 
 You can also call the functions directly:
 
@@ -178,9 +184,10 @@ If no agent is configured, `ask` retains the original behavior and copies the ex
 | `open_agent` | Open or focus the ACP session dashboard |
 | `cancel` | Cancel the active ACP turn |
 | `clear_queue` | Remove pending prompts and return how many were removed |
+| `resolve_ai_comments` | Submit all `@ai:` comments in the current saved file as agent tasks |
 | `new_session` | Create a fresh agent session for the current project |
 | `status` | Return the current project agent's state and session ID |
-| `modified_files` | Pick and open a file modified by the latest completed agent turn |
+| `modified_files` | Pick and open a file modified during the current agent session |
 | `select_model` | Pick from models advertised by the configured agent |
 | `select_thinking_level` | Pick from thinking levels supported by the selected model |
 | `prompt` | Legacy helper that expands a prompt and copies it to the clipboard |

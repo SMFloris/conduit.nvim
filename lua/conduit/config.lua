@@ -53,6 +53,7 @@ local defaults = {
   agent = nil,
   keymaps = {
     ask = "<leader>aa",
+    ai_comments = "<leader>ac",
     toggle = "<leader>aA",
     prompts = "<leader>ap",
     modified_files = "<leader>ah",

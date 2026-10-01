@@ -721,6 +721,17 @@ function M.get(cwd)
   return dashboards[cwd]
 end
 
+---@param cwd string
+---@return boolean
+function M.is_visible(cwd)
+  local dashboard = dashboards[cwd]
+  return dashboard ~= nil and (
+    valid_win(dashboard.watch_win)
+    or valid_win(dashboard.input_win)
+    or valid_win(dashboard.queue_win)
+  )
+end
+
 function M.stop_all()
   for _, dashboard in pairs(dashboards) do
     dashboard.watch_generation = (dashboard.watch_generation or 0) + 1
