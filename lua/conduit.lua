@@ -299,9 +299,7 @@ function M.modified_files(files, root)
             ctx.item.git_diff_checked = true
           end
           if ctx.item.has_git_diff then
-            local diff_ctx = vim.tbl_extend("force", {}, ctx)
-            diff_ctx.item = vim.tbl_extend("force", {}, ctx.item, { file = ctx.item.git_path })
-            snacks.picker.preview.git_diff(diff_ctx)
+            snacks.picker.preview.git_diff(ctx)
             return
           end
         end
