@@ -226,6 +226,85 @@ function M.modified_files()
     return
   end
   local root = status.cwd or require("conduit.project").root()
+  local git_available = false
+  if vim.fn.executable("git") == 1 then
+    local result = vim.system(
+      { "git", "rev-parse", "--is-inside-work-tree" },
+      { cwd = root, text = true }
+    ):wait()
+    git_available = result.code == 0 and vim.trim(result.stdout or "") == "true"
+  end
+  local function open(path)
+    if not path then
+      return
+    end
+    if not vim.uv.fs_stat(path) then
+      vim.notify("Conduit: file no longer exists: " .. path, vim.log.levels.WARN)
+      return
+    end
+    vim.cmd.edit(vim.fn.fnameescape(path))
+  end
+  local snacks_ok, snacks = pcall(require, "snacks")
+  if snacks_ok and snacks.picker and snacks.picker.pick then
+    local items = {}
+    for index, path in ipairs(files) do
+      local relative = path
+      local prefix = vim.fs.normalize(root) .. "/"
+      if path:sub(1, #prefix) == prefix then
+        relative = path:sub(#prefix + 1)
+      end
+      table.insert(items, {
+        idx = index,
+        text = relative,
+        file = path,
+        git_path = relative,
+        cwd = root,
+        deleted = not vim.uv.fs_stat(path),
+      })
+    end
+    snacks.picker.pick({
+      title = "Files modified in this agent session",
+      cwd = root,
+      finder = function() return items end,
+      format = function(item, picker)
+        if item.deleted then
+          return { { "󰆴 ", "DiagnosticError" }, { item.text .. " (deleted)", "DiagnosticError" } }
+        end
+        return snacks.picker.format.file(item, picker)
+      end,
+      preview = function(ctx)
+        if git_available then
+          if not ctx.item.git_diff_checked then
+            local result = vim.system(
+              { "git", "diff", "--no-ext-diff", "--quiet", "HEAD", "--", ctx.item.git_path },
+              { cwd = root, text = true }
+            ):wait()
+            ctx.item.has_git_diff = result.code == 1
+            ctx.item.git_diff_checked = true
+          end
+          if ctx.item.has_git_diff then
+            local diff_ctx = vim.tbl_extend("force", {}, ctx)
+            diff_ctx.item = vim.tbl_extend("force", {}, ctx.item, { file = ctx.item.git_path })
+            snacks.picker.preview.git_diff(diff_ctx)
+            return
+          end
+        end
+        if ctx.item.deleted then
+          ctx.preview:notify("File was deleted during this agent session", "warn")
+          return
+        end
+        snacks.picker.preview.file(ctx)
+      end,
+      layout = { preset = "default" },
+      confirm = function(picker, item)
+        picker:close()
+        vim.schedule(function()
+          open(item and item.file)
+        end)
+      end,
+    })
+    return
+  end
   vim.ui.select(files, {
     prompt = "Files modified in this agent session: ",
     format_item = function(path)
@@ -237,14 +316,7 @@ function M.modified_files()
       return vim.uv.fs_stat(path) and relative or (relative .. " (deleted)")
     end,
   }, function(path)
-    if not path then
-      return
-    end
-    if not vim.uv.fs_stat(path) then
-      vim.notify("Conduit: file no longer exists: " .. path, vim.log.levels.WARN)
-      return
-    end
-    vim.cmd.edit(vim.fn.fnameescape(path))
+    open(path)
   end)
 end
 

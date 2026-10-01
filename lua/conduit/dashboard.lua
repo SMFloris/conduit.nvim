@@ -22,6 +22,7 @@ local function setup_highlights()
     ConduitQueueReady = "DiagnosticOk",
     ConduitQueueItem = "Normal",
     ConduitQueueEmpty = "NonText",
+    ConduitModified = "DiagnosticInfo",
     ConduitPromptBorder = "DiagnosticInfo",
   }
   for name, link in pairs(links) do
@@ -354,12 +355,29 @@ local function short_prompt(prompt, width)
   return prompt
 end
 
+local function relative_path(root, path)
+  path = vim.fs.normalize(path)
+  local prefix = vim.fs.normalize(root) .. "/"
+  return path:sub(1, #prefix) == prefix and path:sub(#prefix + 1) or path
+end
+
+local function session_file_set(cwd)
+  local files = require("conduit.agent").status(cwd).session_changed_files or {}
+  local set = {}
+  for _, path in ipairs(files) do
+    set[vim.fs.normalize(path)] = true
+  end
+  return files, set
+end
+
 local function render_queue(dashboard)
   if not dashboard.queue_buf or not vim.api.nvim_buf_is_valid(dashboard.queue_buf) then
     return
   end
-  local status = require("conduit.agent").status()
+  local status = require("conduit.agent").status(dashboard.cwd)
   local width = dashboard.queue_width or 30
+  local height = dashboard.queue_height or 30
+  local item_limit = math.max(0, math.floor((height - 11) / 2))
   local lines, highlights = {}, {}
   local function line(text, highlight)
     table.insert(lines, text)
@@ -387,11 +405,29 @@ local function render_queue(dashboard)
   end
   line("")
   line(string.format("  QUEUED  %d", #(status.queued_prompts or {})), "ConduitQueueSection")
-  for index, prompt in ipairs(status.queued_prompts or {}) do
-    line(string.format("  %02d  %s", index, short_prompt(prompt, width - 8)), "ConduitQueueItem")
+  local queued = status.queued_prompts or {}
+  for index = 1, math.min(#queued, item_limit) do
+    line(string.format("  %02d  %s", index, short_prompt(queued[index], width - 8)), "ConduitQueueItem")
   end
-  if #(status.queued_prompts or {}) == 0 then
+  if #queued == 0 then
     line("  Queue is empty", "ConduitQueueEmpty")
+  elseif #queued > item_limit then
+    line(string.format("  +%d more", #queued - item_limit), "ConduitQueueEmpty")
+  end
+  line("")
+  local modified = status.session_changed_files or {}
+  line(string.format("  MODIFIED  %d", #modified), "ConduitQueueSection")
+  for index = 1, math.min(#modified, item_limit) do
+    local path = relative_path(dashboard.cwd, modified[index])
+    if not vim.uv.fs_stat(modified[index]) then
+      path = path .. " (deleted)"
+    end
+    line("  ●  " .. short_prompt(path, width - 7), "ConduitModified")
+  end
+  if #modified == 0 then
+    line("  No files yet", "ConduitQueueEmpty")
+  elseif #modified > item_limit then
+    line(string.format("  +%d more", #modified - item_limit), "ConduitQueueEmpty")
   end
   vim.bo[dashboard.queue_buf].modifiable = true
   vim.api.nvim_buf_set_lines(dashboard.queue_buf, 0, -1, false, lines)
@@ -481,6 +517,15 @@ local function fallback_files(dashboard)
         return
       end
       local files = vim.tbl_filter(function(line) return line ~= "" end, vim.split(result.stdout or "", "\n"))
+      local _, modified = session_file_set(dashboard.cwd)
+      table.sort(files, function(left, right)
+        local left_modified = modified[vim.fs.normalize(dashboard.cwd .. "/" .. left)] or false
+        local right_modified = modified[vim.fs.normalize(dashboard.cwd .. "/" .. right)] or false
+        if left_modified ~= right_modified then
+          return left_modified
+        end
+        return left < right
+      end)
       vim.ui.select(files, { prompt = "Reference project file: " }, function(choice)
         insert_reference(dashboard, choice)
       end)
@@ -491,8 +536,29 @@ end
 local function pick_file(dashboard)
   local ok, snacks = pcall(require, "snacks")
   if ok and snacks.picker and snacks.picker.files then
+    local _, modified = session_file_set(dashboard.cwd)
     snacks.picker.files({
       cwd = dashboard.cwd,
+      matcher = { sort_empty = true },
+      transform = function(item)
+        local path = item.file or item.text
+        if path and path:sub(1, 1) ~= "/" then
+          path = dashboard.cwd .. "/" .. path
+        end
+        if path and modified[vim.fs.normalize(path)] then
+          item.score_add = (item.score_add or 0) + 10000
+          item.conduit_modified = true
+        end
+        return item
+      end,
+      format = function(item, picker)
+        local formatted = snacks.picker.format.file(item, picker)
+        table.insert(formatted, 1, {
+          item.conduit_modified and "● " or "  ",
+          item.conduit_modified and "DiagnosticInfo" or nil,
+        })
+        return formatted
+      end,
       confirm = function(picker, item)
         picker:close()
         if item then
@@ -645,6 +711,7 @@ local function open_windows(dashboard)
   local row = math.max(0, math.floor((vim.o.lines - total_height) / 2) - 1)
   local col = math.max(0, math.floor((vim.o.columns - total_width) / 2))
   dashboard.queue_width = queue_width
+  dashboard.queue_height = total_height
 
   dashboard.watch_win = vim.api.nvim_open_win(dashboard.watch_buf, false, {
     relative = "editor", row = row, col = col, width = main_width, height = watch_height,
@@ -657,7 +724,7 @@ local function open_windows(dashboard)
   })
   dashboard.queue_win = vim.api.nvim_open_win(dashboard.queue_buf, false, {
     relative = "editor", row = row, col = col + main_width + 1, width = queue_width, height = total_height,
-    style = "minimal", border = opts.border, title = " Agent queue ", title_pos = "center", focusable = false,
+    style = "minimal", border = opts.border, title = " Agent session ", title_pos = "center", focusable = false,
   })
   vim.wo[dashboard.watch_win].winhl = "Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:Title"
   vim.wo[dashboard.watch_win].scrolloff = 0

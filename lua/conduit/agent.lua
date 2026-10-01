@@ -1146,8 +1146,17 @@ function M.stop_all()
   require("conduit.dashboard").stop_all()
 end
 
-function M.status()
-  local instance, err = get_instance()
+---@param cwd? string
+function M.status(cwd)
+  local instance, err
+  if cwd then
+    instance = instances[cwd]
+    if not instance then
+      return { state = "stopped", cwd = cwd, session_changed_files = {}, queued_prompts = {} }
+    end
+  else
+    instance, err = get_instance()
+  end
   if not instance then
     return { state = "unconfigured", error = err }
   end
